@@ -48,13 +48,15 @@ with tab_step1:
     )
 
 with tab_report:
-    st.write(
-        "Upload the CSV file you downloaded from Advisor Toolkit. The app will generate a Word report with tables and charts, "
-        "using enrollment data (All_International_Students_Enrolled.csv) for comparison."
-    )
-
     st.markdown(
         """
+### Step 3 - Generate report
+
+1. After you copy the EID list, use it in Advisor Toolkit to pull the latest data.
+2. In Advisor Toolkit, include at least these fields in your report: **Major**, **Pseudo School(s)**, **Gender**, **Citizenship** (US citizen, PR, or international), and **Irregular Program** (e.g., Option III).
+3. Generate the report and download it as a CSV.
+4. Upload the CSV file you downloaded from Advisor Toolkit. The app will generate a Word report with tables and charts, using enrollment data (All_International_Students_Enrolled.csv) for comparison.
+
 ### Event participants CSV
 
 - **Required for cleaning and proportions:**
@@ -155,10 +157,4 @@ with tab_extract_eids:
                                 language="text",
                             )
 
-    st.markdown(
-        """
-4. After you copy the EID list, use it in Advisor Toolkit to pull the latest data.
-5. In Advisor Toolkit, include at least these fields in your report: **Major**, **Pseudo School(s)**, **Gender**, **Citizenship** (US citizen, PR, or international), and **Irregular Program** (e.g., Option III).
-6. Generate the report and download it as a CSV.
-"""
-    )
+    # Further instructions for using the EID list now appear in Step 3.
