@@ -1,11 +1,18 @@
 import os
 import tempfile
+import base64
 
 import streamlit as st
+import streamlit.components.v1 as components
 from docx import Document
 
 from Generate_Proportion import generate_report
 from Extract_EIDs import extract_eids_from_directory, write_eids_to_csv
+
+try:
+    from docx2pdf import convert as docx2pdf_convert
+except ImportError:
+    docx2pdf_convert = None
 
 
 st.set_page_config(page_title="Event Participant Report", layout="centered")
@@ -99,34 +106,68 @@ with tab_report:
                         report_bytes = f.read()
 
                     report_name = os.path.basename(report_path)
-                    st.success("Report generated successfully.")
-                    st.download_button(
-                        label="Download report (.docx)",
-                        data=report_bytes,
-                        file_name=report_name,
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    )
 
-                    # Simple text preview of the generated report
-                    try:
-                        doc = Document(report_path)
-                        preview_lines = []
-                        for para in doc.paragraphs:
-                            text = para.text.strip()
-                            if text:
-                                preview_lines.append(text)
-                            if len(preview_lines) >= 40:
-                                break
-                        if preview_lines:
-                            st.markdown("#### Report preview")
-                            st.text_area(
-                                "First part of the report (preview)",
-                                value="\n".join(preview_lines),
-                                height=300,
+                    # Try to convert the .docx report to PDF for preview and download
+                    pdf_bytes = None
+                    pdf_name = os.path.splitext(report_name)[0] + ".pdf"
+                    if docx2pdf_convert is not None:
+                        try:
+                            pdf_path = os.path.splitext(report_path)[0] + ".pdf"
+                            docx2pdf_convert(report_path, pdf_path)
+                            with open(pdf_path, "rb") as pf:
+                                pdf_bytes = pf.read()
+                        except Exception:
+                            pdf_bytes = None
+
+                    st.success("Report generated successfully.")
+                    col_docx, col_pdf = st.columns(2)
+                    with col_docx:
+                        st.download_button(
+                            label="Download report (.docx)",
+                            data=report_bytes,
+                            file_name=report_name,
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        )
+                    with col_pdf:
+                        if pdf_bytes is not None:
+                            st.download_button(
+                                label="Download report (.pdf)",
+                                data=pdf_bytes,
+                                file_name=pdf_name,
+                                mime="application/pdf",
                             )
-                    except Exception:
-                        # If preview fails for any reason, don't block download
-                        pass
+                        else:
+                            st.info("PDF download is currently unavailable; only the Word version can be downloaded.")
+
+                    # Prefer a PDF preview if available, otherwise fall back to a simple text preview
+                    if pdf_bytes is not None:
+                        try:
+                            b64_pdf = base64.b64encode(pdf_bytes).decode("utf-8")
+                            pdf_html = f'<iframe src="data:application/pdf;base64,{b64_pdf}" width="100%" height="700" type="application/pdf"></iframe>'
+                            st.markdown("#### Report preview (PDF)")
+                            components.html(pdf_html, height=700)
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            doc = Document(report_path)
+                            preview_lines = []
+                            for para in doc.paragraphs:
+                                text = para.text.strip()
+                                if text:
+                                    preview_lines.append(text)
+                                if len(preview_lines) >= 40:
+                                    break
+                            if preview_lines:
+                                st.markdown("#### Report preview")
+                                st.text_area(
+                                    "First part of the report (preview)",
+                                    value="\n".join(preview_lines),
+                                    height=300,
+                                )
+                        except Exception:
+                            # If preview fails for any reason, don't block downloads
+                            pass
 
 with tab_extract_eids:
     st.markdown(
