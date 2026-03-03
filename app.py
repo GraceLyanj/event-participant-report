@@ -4,18 +4,23 @@ import tempfile
 import streamlit as st
 
 from Generate_Proportion import generate_report
+from Extract_EIDs import extract_eids_from_directory, write_eids_to_csv
 
 
 st.set_page_config(page_title="Event Participant Proportions Report", layout="centered")
 
 st.title("Event Participant Proportions Report")
-st.write(
-    "Upload your event participants CSV (and optionally an enrollment reference CSV). "
-    "The app will generate a Word report with tables and charts, similar to the desktop script."
-)
 
-st.markdown(
-    """
+tab_report, tab_extract_eids = st.tabs(["Generate report", "Extract EIDs from folder CSVs"])
+
+with tab_report:
+    st.write(
+        "Upload your event participants CSV. The app will generate a Word report with tables and charts, "
+        "using embedded enrollment data (All_International_Students_Enrolled.csv) for comparison."
+    )
+
+    st.markdown(
+        """
 ### Event participants CSV
 
 - **Required for cleaning and proportions:**
@@ -29,74 +34,89 @@ st.markdown(
   - `Citizenship`
   - `Irregular Program`
 """
-)
+    )
 
-event_file = st.file_uploader(
-    "Upload event participants CSV",
-    type=["csv"],
-    accept_multiple_files=False,
-    help="This should be the CSV you currently pass to Generate_Proportion.py.",
-)
+    event_file = st.file_uploader(
+        "Upload event participants CSV",
+        type=["csv"],
+        accept_multiple_files=False,
+        help="This should be the CSV you currently pass to Generate_Proportion.py.",
+        key="event_file",
+    )
 
-st.markdown(
-    """
-### Enrollment reference CSV (for comparison to overall enrollment)
+    generate_clicked = st.button("Generate report", key="generate_report_button")
 
-If you provide this, the report will include enrollment vs participation by school.
+    if generate_clicked:
+        if event_file is None:
+            st.warning("Please upload an event participants CSV first.")
+            st.stop()
+        with st.spinner("Generating report..."):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                event_path = os.path.join(tmpdir, event_file.name)
+                with open(event_path, "wb") as f:
+                    f.write(event_file.read())
 
-- **Option 1 – Summary format:**
-  - `School`
-  - One of: `Enrollment`, `Count`, or `Students`
-- **Option 2 – Student-level format** (same structure as event CSV):
-  - `Pseudo Sch1` (and optionally `Pseudo Sch2`)
+                try:
+                    report_path = generate_report(event_path, None)
+                except Exception as e:
+                    st.error(f"Error while generating report: {e}")
+                else:
+                    with open(report_path, "rb") as f:
+                        report_bytes = f.read()
 
-If you leave this blank, the script will try to use
-`All_International_Students_Enrolled.csv` from the event CSV folder, the script folder,
-or your Downloads folder.
-"""
-)
+                    report_name = os.path.basename(report_path)
+                    st.success("Report generated successfully.")
+                    st.download_button(
+                        label="Download report (.docx)",
+                        data=report_bytes,
+                        file_name=report_name,
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    )
 
-enrollment_file = st.file_uploader(
-    "Upload enrollment reference CSV (optional)",
-    type=["csv"],
-    accept_multiple_files=False,
-    help="Leave blank to let the script auto-detect All_International_Students_Enrolled.csv.",
-)
+with tab_extract_eids:
+    st.write(
+        "Upload one or more CSV files from a folder. All EIDs from EID-like columns "
+        "will be collected and merged into a single list. Download **all_EIDs.csv** with unique EIDs."
+    )
+    st.markdown("Uses the same logic as **Extract_EIDs.py** (one folder = one set of CSVs here).")
 
-# Single Generate button
-generate_clicked = st.button("Generate report", key="generate_report_button")
+    csv_uploads = st.file_uploader(
+        "Upload CSV file(s)",
+        type=["csv"],
+        accept_multiple_files=True,
+        help="Select all CSV files from your folder.",
+        key="extract_eids_uploads",
+    )
 
-if generate_clicked:
-    if event_file is None:
-        st.warning("Please upload an event participants CSV first.")
-        st.stop()
-    with st.spinner("Generating report..."):
-        # Save uploaded files to temporary directory
-        with tempfile.TemporaryDirectory() as tmpdir:
-            event_path = os.path.join(tmpdir, event_file.name)
-            with open(event_path, "wb") as f:
-                f.write(event_file.read())
+    extract_clicked = st.button("Extract EIDs", key="extract_eids_button")
 
-            enrollment_path = None
-            if enrollment_file is not None:
-                enrollment_path = os.path.join(tmpdir, enrollment_file.name)
-                with open(enrollment_path, "wb") as f:
-                    f.write(enrollment_file.read())
-
-            try:
-                report_path = generate_report(event_path, enrollment_path)
-            except Exception as e:
-                st.error(f"Error while generating report: {e}")
-            else:
-                # Read report bytes and offer download
-                with open(report_path, "rb") as f:
-                    report_bytes = f.read()
-
-                report_name = os.path.basename(report_path)
-                st.success("Report generated successfully.")
-                st.download_button(
-                    label="Download report (.docx)",
-                    data=report_bytes,
-                    file_name=report_name,
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                )
+    if extract_clicked:
+        if not csv_uploads:
+            st.warning("Please upload at least one CSV file.")
+        else:
+            with st.spinner("Extracting EIDs from all CSVs..."):
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    for up in csv_uploads:
+                        path = os.path.join(tmpdir, up.name)
+                        with open(path, "wb") as f:
+                            f.write(up.read())
+                    try:
+                        eids = extract_eids_from_directory(tmpdir)
+                    except Exception as e:
+                        st.error(f"Error while extracting EIDs: {e}")
+                    else:
+                        if not eids:
+                            st.info("No EIDs found in any of the uploaded CSVs.")
+                        else:
+                            out_path = os.path.join(tmpdir, "all_EIDs.csv")
+                            write_eids_to_csv(eids, out_path)
+                            with open(out_path, "rb") as f:
+                                csv_bytes = f.read()
+                            st.success(f"Found **{len(eids)}** unique EID(s).")
+                            st.download_button(
+                                label="Download all_EIDs.csv",
+                                data=csv_bytes,
+                                file_name="all_EIDs.csv",
+                                mime="text/csv",
+                                key="download_all_eids",
+                            )
