@@ -145,21 +145,19 @@ with tab_extract_eids:
                         if not eids:
                             st.info("No EIDs found in any of the uploaded CSVs.")
                         else:
-                            # Show EIDs as a newline‑separated, directly copyable block
+                            # Show EIDs as a newline‑separated, directly copyable code block
                             eids_list = sorted(eids)
                             eids_text = "\n".join(eids_list)
-                            st.success(f"Found **{len(eids)}** unique EID(s). Copy them from the box below.")
-                            st.text_area(
-                                "EID list",
-                                value=eids_text,
-                                height=300,
-                                help="Scroll to view all EIDs. You can copy this entire list.",
+                            st.success(f"Found **{len(eids)}** unique EID(s). Use the copy button on the code block to copy them.")
+                            st.code(
+                                eids_text,
+                                language="text",
                             )
 
     st.markdown(
         """
-4. After you have the EID list, use it in Advisor Toolkit to pull the latest data.
-5. In Advisor Toolkit, include at least these fields in your report: **Major**, **Pseudo School(s)**, **Gender**, **Citizenship** (US citizen, PR, or international), and **Irregular Program** (e.g., Option III), matching the fields used in this app’s dataset.
+4. After you copy the EID list, use it in Advisor Toolkit to pull the latest data.
+5. In Advisor Toolkit, include at least these fields in your report: **Major**, **Pseudo School(s)**, **Gender**, **Citizenship** (US citizen, PR, or international), and **Irregular Program** (e.g., Option III).
 6. Generate the report and download it as a CSV.
 """
     )
