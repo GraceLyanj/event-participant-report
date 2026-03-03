@@ -38,10 +38,10 @@ with tab_step1:
 ### Step 1 - Pull data from Eventbrite
 
 1. Go to the event you want to analyze in Eventbrite.
-2. In the left sidebar, open **Reporting → Custom question responses**.
-3. Under **Attendee status**, select **Attended**.
-4. In **Configure columns**, deselect all columns, then select only **Custom Questions Responses**.
-5. Click **Update report**.
+2. In the left sidebar, open **Reporting → Custom Question Responses**.
+3. Under **Attendee Status**, select **Attended**.
+4. In **Configure Columns**, deselect all columns, then select only **Custom Questions Responses**.
+5. Click **Update Report**.
 6. Export the report as a CSV file.
 7. Repeat these steps for each event if you are analyzing an event series.
 """
@@ -50,7 +50,7 @@ with tab_step1:
 with tab_report:
     st.write(
         "Upload the CSV file you downloaded from Advisor Toolkit. The app will generate a Word report with tables and charts, "
-        "using embedded enrollment data (All_International_Students_Enrolled.csv) for comparison."
+        "using enrollment data (All_International_Students_Enrolled.csv) for comparison."
     )
 
     st.markdown(
@@ -115,9 +115,6 @@ with tab_extract_eids:
 1. Open the **Advisor Toolkit** at [`https://utdirect.utexas.edu/link1/adtoolkit.WBX`](https://utdirect.utexas.edu/link1/adtoolkit.WBX).
 2. In the left navigation bar, go to **Reporting toolkit → Latest data for EIDs (no semesters required)**.
 3. Upload the CSV file(s) you exported from Eventbrite in Step 1 **here** to generate a clean list of EIDs using the tool below.
-4. After you have the EID list, use it in Advisor Toolkit to pull the latest data.
-5. In Advisor Toolkit, include at least these fields in your report: **Major**, **Pseudo School(s)**, **Gender**, **Citizenship** (US citizen, PR, or international), and **Irregular Program** (e.g., Option III), matching the fields used in this app’s dataset.
-6. Generate the report and download it as a CSV.
 """
     )
 
@@ -127,6 +124,14 @@ with tab_extract_eids:
         accept_multiple_files=True,
         help="Select all CSV files.",
         key="extract_eids_uploads",
+    )
+
+    st.markdown(
+        """
+4. After you have the EID list, use it in Advisor Toolkit to pull the latest data.
+5. In Advisor Toolkit, include at least these fields in your report: **Major**, **Pseudo School(s)**, **Gender**, **Citizenship** (US citizen, PR, or international), and **Irregular Program** (e.g., Option III), matching the fields used in this app’s dataset.
+6. Generate the report and download it as a CSV.
+"""
     )
 
     extract_clicked = st.button("Extract EIDs", key="extract_eids_button")
