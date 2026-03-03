@@ -62,7 +62,6 @@ with tab_report:
   - `Derived Academic Status`
   - `Pseudo Sch1`
 - **Recommended (for more tables/charts):**
-  - `Pseudo Sch2` (if students can have a second school)
   - `Maj1 Name`
   - `Gender`
   - `Citizenship`
@@ -126,14 +125,6 @@ with tab_extract_eids:
         key="extract_eids_uploads",
     )
 
-    st.markdown(
-        """
-4. After you have the EID list, use it in Advisor Toolkit to pull the latest data.
-5. In Advisor Toolkit, include at least these fields in your report: **Major**, **Pseudo School(s)**, **Gender**, **Citizenship** (US citizen, PR, or international), and **Irregular Program** (e.g., Option III), matching the fields used in this app’s dataset.
-6. Generate the report and download it as a CSV.
-"""
-    )
-
     extract_clicked = st.button("Extract EIDs", key="extract_eids_button")
 
     if extract_clicked:
@@ -164,3 +155,11 @@ with tab_extract_eids:
                                 height=300,
                                 help="Scroll to view all EIDs. You can copy this entire list.",
                             )
+
+    st.markdown(
+        """
+4. After you have the EID list, use it in Advisor Toolkit to pull the latest data.
+5. In Advisor Toolkit, include at least these fields in your report: **Major**, **Pseudo School(s)**, **Gender**, **Citizenship** (US citizen, PR, or international), and **Irregular Program** (e.g., Option III), matching the fields used in this app’s dataset.
+6. Generate the report and download it as a CSV.
+"""
+    )
