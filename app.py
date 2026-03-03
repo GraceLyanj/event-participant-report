@@ -24,7 +24,28 @@ st.markdown(
 
 st.title("Event Participant Proportions Report")
 
-tab_report, tab_extract_eids = st.tabs(["Generate report", "Extract EIDs from multiple CSVs"])
+tab_step1, tab_extract_eids, tab_report = st.tabs(
+    [
+        "Step 1 - Pull from Eventbrite",
+        "Step 2 - Extract EIDs from multiple CSVs",
+        "Step 3 - Generate report",
+    ]
+)
+
+with tab_step1:
+    st.markdown(
+        """
+### Step 1 - Pull data from Eventbrite
+
+1. Go to the event you want to analyze in Eventbrite.
+2. In the left sidebar, open **Reporting → Custom question responses**.
+3. Under **Attendee status**, select **Attended**.
+4. In **Configure columns**, deselect all columns, then select only **Custom Questions Responses**.
+5. Click **Update report**.
+6. Export the report as a CSV file.
+7. Repeat these steps for each event if you are analyzing an event series.
+"""
+    )
 
 with tab_report:
     st.write(
@@ -88,9 +109,9 @@ with tab_report:
 
 with tab_extract_eids:
     st.write(
-        "Upload one or more CSV files from a folder. All EIDs from EID-like columns "
+        "Upload one or more CSV files from one event / event series. All EIDs from EID-like columns "
         "will be collected and merged into a single list. After extraction, you can copy a newline‑separated list "
-        "of unique EIDs from the box below (with a copy icon)."
+        "of unique EIDs from the box below."
     )
 
     csv_uploads = st.file_uploader(
