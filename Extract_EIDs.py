@@ -60,6 +60,12 @@ def extract_eids_from_csv(path: str) -> Set[str]:
             s = str(val).strip()
             if not s:
                 continue
+            # If value looks like an email (contains '@'), keep only what is
+            # before the '@' as the EID.
+            if "@" in s:
+                s = s.split("@", 1)[0].strip()
+                if not s:
+                    continue
             low = s.lower()
             if low in {"nan", "na", "none"}:
                 continue

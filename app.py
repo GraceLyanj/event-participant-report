@@ -9,6 +9,19 @@ from Extract_EIDs import extract_eids_from_directory, write_eids_to_csv
 
 st.set_page_config(page_title="Event Participant Proportions Report", layout="centered")
 
+# Always show the copy icon on code blocks (not just on hover)
+st.markdown(
+    """
+    <style>
+    [data-testid="stCodeBlock"] button {
+        opacity: 1 !important;
+        visibility: visible !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 st.title("Event Participant Proportions Report")
 
 tab_report, tab_extract_eids = st.tabs(["Generate report", "Extract EIDs from multiple CSVs"])
@@ -79,7 +92,6 @@ with tab_extract_eids:
         "will be collected and merged into a single list. After extraction, you can copy a newline‑separated list "
         "of unique EIDs from the box below (with a copy icon)."
     )
-    st.markdown("Uses the same logic as **Extract_EIDs.py** (one folder = one set of CSVs here).")
 
     csv_uploads = st.file_uploader(
         "Upload CSV file(s)",
