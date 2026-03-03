@@ -114,10 +114,10 @@ with tab_extract_eids:
 
 1. Open the **Advisor Toolkit** at [`https://utdirect.utexas.edu/link1/adtoolkit.WBX`](https://utdirect.utexas.edu/link1/adtoolkit.WBX).
 2. In the left navigation bar, go to **Reporting toolkit → Latest data for EIDs (no semesters required)**.
-3. Use the CSV file(s) you exported from Eventbrite in Step 1 as input here to get the latest data for those EIDs.
-4. In Advisor Toolkit, include at least these fields in your report: **Major**, **Pseudo School(s)**, **Gender**, **Citizenship** (US citizen, PR, or international), and **Irregular Program** (e.g., Option III), matching the fields used in this app’s dataset.
-5. Generate the report and download it as a CSV.
-6. Then upload the same CSV file(s) below to extract and collect all EIDs into a single list you can copy.
+3. Upload the CSV file(s) you exported from Eventbrite in Step 1 **here** to generate a clean list of EIDs using the tool below.
+4. After you have the EID list, use it in Advisor Toolkit to pull the latest data.
+5. In Advisor Toolkit, include at least these fields in your report: **Major**, **Pseudo School(s)**, **Gender**, **Citizenship** (US citizen, PR, or international), and **Irregular Program** (e.g., Option III), matching the fields used in this app’s dataset.
+6. Generate the report and download it as a CSV.
 
 Upload one or more CSV files from one event / event series. All EIDs from EID-like columns
 will be collected and merged into a single list. After extraction, you can copy a newline‑separated list
@@ -157,4 +157,9 @@ of unique EIDs from the box below.
                             eids_list = sorted(eids)
                             eids_text = "\n".join(eids_list)
                             st.success(f"Found **{len(eids)}** unique EID(s). Copy them from the box below.")
-                            st.code(eids_text, language="text")
+                            st.text_area(
+                                "EID list",
+                                value=eids_text,
+                                height=300,
+                                help="Scroll to view all EIDs. You can copy this entire list.",
+                            )
