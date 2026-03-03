@@ -2,12 +2,13 @@ import os
 import tempfile
 
 import streamlit as st
+from docx import Document
 
 from Generate_Proportion import generate_report
 from Extract_EIDs import extract_eids_from_directory, write_eids_to_csv
 
 
-st.set_page_config(page_title="Event Participant Proportions Report", layout="centered")
+st.set_page_config(page_title="Event Participant Report", layout="centered")
 
 # Always show the copy icon on code blocks (not just on hover)
 st.markdown(
@@ -105,6 +106,27 @@ with tab_report:
                         file_name=report_name,
                         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                     )
+
+                    # Simple text preview of the generated report
+                    try:
+                        doc = Document(report_path)
+                        preview_lines = []
+                        for para in doc.paragraphs:
+                            text = para.text.strip()
+                            if text:
+                                preview_lines.append(text)
+                            if len(preview_lines) >= 40:
+                                break
+                        if preview_lines:
+                            st.markdown("#### Report preview")
+                            st.text_area(
+                                "First part of the report (preview)",
+                                value="\n".join(preview_lines),
+                                height=300,
+                            )
+                    except Exception:
+                        # If preview fails for any reason, don't block download
+                        pass
 
 with tab_extract_eids:
     st.markdown(
