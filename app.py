@@ -11,7 +11,7 @@ st.set_page_config(page_title="Event Participant Proportions Report", layout="ce
 
 st.title("Event Participant Proportions Report")
 
-tab_report, tab_extract_eids = st.tabs(["Generate report", "Extract EIDs from folder CSVs"])
+tab_report, tab_extract_eids = st.tabs(["Generate report", "Extract EIDs from multiple CSVs"])
 
 with tab_report:
     st.write(
@@ -76,7 +76,8 @@ with tab_report:
 with tab_extract_eids:
     st.write(
         "Upload one or more CSV files from a folder. All EIDs from EID-like columns "
-        "will be collected and merged into a single list. Download **all_EIDs.csv** with unique EIDs."
+        "will be collected and merged into a single list. After extraction, you can copy a newline‑separated list "
+        "of unique EIDs from the box below (with a copy icon)."
     )
     st.markdown("Uses the same logic as **Extract_EIDs.py** (one folder = one set of CSVs here).")
 
@@ -84,7 +85,7 @@ with tab_extract_eids:
         "Upload CSV file(s)",
         type=["csv"],
         accept_multiple_files=True,
-        help="Select all CSV files from your folder.",
+        help="Select all CSV files.",
         key="extract_eids_uploads",
     )
 
@@ -108,15 +109,8 @@ with tab_extract_eids:
                         if not eids:
                             st.info("No EIDs found in any of the uploaded CSVs.")
                         else:
-                            out_path = os.path.join(tmpdir, "all_EIDs.csv")
-                            write_eids_to_csv(eids, out_path)
-                            with open(out_path, "rb") as f:
-                                csv_bytes = f.read()
-                            st.success(f"Found **{len(eids)}** unique EID(s).")
-                            st.download_button(
-                                label="Download all_EIDs.csv",
-                                data=csv_bytes,
-                                file_name="all_EIDs.csv",
-                                mime="text/csv",
-                                key="download_all_eids",
-                            )
+                            # Show EIDs as a newline‑separated, directly copyable block
+                            eids_list = sorted(eids)
+                            eids_text = "\n".join(eids_list)
+                            st.success(f"Found **{len(eids)}** unique EID(s). Copy them from the box below.")
+                            st.code(eids_text, language="text")
