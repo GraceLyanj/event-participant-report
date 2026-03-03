@@ -1,6 +1,7 @@
 import os
 import tempfile
 import base64
+import io
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -9,10 +10,52 @@ from docx import Document
 from Generate_Proportion import generate_report
 from Extract_EIDs import extract_eids_from_directory, write_eids_to_csv
 
-try:
-    from docx2pdf import convert as docx2pdf_convert
-except ImportError:
-    docx2pdf_convert = None
+
+def docx_to_simple_pdf_bytes(docx_path: str):
+    """
+    Best-effort conversion of a .docx file to a simple text-based PDF.
+    This avoids system dependencies (e.g. Microsoft Word) so it can run
+    on Streamlit Cloud. Layout is simplified (text only, no tables/charts).
+    """
+    try:
+        from reportlab.lib.pagesizes import letter
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+        from reportlab.lib.styles import getSampleStyleSheet
+    except ImportError:
+        return None
+
+    try:
+        doc = Document(docx_path)
+    except Exception:
+        return None
+
+    buf = io.BytesIO()
+    pdf = SimpleDocTemplate(buf, pagesize=letter)
+    styles = getSampleStyleSheet()
+    story = []
+
+    for para in doc.paragraphs:
+        text = para.text.strip()
+        if not text:
+            story.append(Spacer(1, 12))
+            continue
+        # Basic HTML-escaping for Paragraph
+        safe_text = (
+            text.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\n", "<br/>")
+        )
+        story.append(Paragraph(safe_text, styles["Normal"]))
+        story.append(Spacer(1, 6))
+
+    try:
+        pdf.build(story)
+    except Exception:
+        return None
+
+    buf.seek(0)
+    return buf.read()
 
 
 st.set_page_config(page_title="Event Participant Report", layout="centered")
@@ -107,17 +150,9 @@ with tab_report:
 
                     report_name = os.path.basename(report_path)
 
-                    # Try to convert the .docx report to PDF for preview and download
-                    pdf_bytes = None
+                    # Convert the .docx report to a simple PDF (text-only) for preview and download
+                    pdf_bytes = docx_to_simple_pdf_bytes(report_path)
                     pdf_name = os.path.splitext(report_name)[0] + ".pdf"
-                    if docx2pdf_convert is not None:
-                        try:
-                            pdf_path = os.path.splitext(report_path)[0] + ".pdf"
-                            docx2pdf_convert(report_path, pdf_path)
-                            with open(pdf_path, "rb") as pf:
-                                pdf_bytes = pf.read()
-                        except Exception:
-                            pdf_bytes = None
 
                     st.success("Report generated successfully.")
                     col_docx, col_pdf = st.columns(2)
