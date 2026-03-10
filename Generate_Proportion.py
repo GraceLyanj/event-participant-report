@@ -293,25 +293,61 @@ def build_representation_comparison(participation_counts, total_participants, en
     """
     Build comparison table: Enrollment %, Participation %, Representation Ratio.
     Ratio = (Participation %) / (Enrollment %). ≈1 proportional, >1 overrepresented, <1 underrepresented.
+
+    If a school appears twice with and without a leading code, e.g.
+    "(2)Business Administration" and "Business Administration", they are
+    merged into a single row using the plain-school label.
     """
     if total_participants <= 0 or total_enrollment <= 0:
-        return pd.DataFrame(columns=["School", "Enrollment Count", "Enrollment %", "Participant Count", "Participation %", "Representation Ratio"])
-    all_schools = sorted(set(participation_counts.index) | set(enrollment_counts.index))
+        return pd.DataFrame(
+            columns=[
+                "School",
+                "Enrollment Count",
+                "Enrollment %",
+                "Participant Count",
+                "Participation %",
+                "Representation Ratio",
+            ]
+        )
+
+    def _normalize_label(label: str) -> str:
+        s = str(label).strip()
+        m = re.match(r"\(([^)]+)\)\s*(.+)", s)
+        return m.group(2).strip() if m else s
+
+    # Normalize and merge participation counts
+    part_norm = {}
+    for school, val in participation_counts.items():
+        key = _normalize_label(school)
+        part_norm[key] = part_norm.get(key, 0) + int(val)
+
+    # Normalize and merge enrollment counts
+    enr_norm = {}
+    for school, val in enrollment_counts.items():
+        key = _normalize_label(school)
+        enr_norm[key] = enr_norm.get(key, 0) + int(val)
+
+    all_schools = sorted(set(part_norm.keys()) | set(enr_norm.keys()))
     rows = []
     for school in all_schools:
-        enc = int(enrollment_counts.get(school, 0))
-        prc = int(participation_counts.get(school, 0))
-        enr_pct = (enc / total_enrollment) * 100
-        part_pct = (prc / total_participants) * 100
+        enc = int(enr_norm.get(school, 0))
+        prc = int(part_norm.get(school, 0))
+        # Skip rows where both enrollment and participation are zero
+        if enc == 0 and prc == 0:
+            continue
+        enr_pct = (enc / total_enrollment) * 100 if total_enrollment > 0 else 0.0
+        part_pct = (prc / total_participants) * 100 if total_participants > 0 else 0.0
         ratio = (part_pct / enr_pct) if enr_pct else float("nan")
-        rows.append({
-            "School": school,
-            "Enrollment Count": enc,
-            "Enrollment %": enr_pct,
-            "Participant Count": prc,
-            "Participation %": part_pct,
-            "Representation Ratio": ratio,
-        })
+        rows.append(
+            {
+                "School": school,
+                "Enrollment Count": enc,
+                "Enrollment %": enr_pct,
+                "Participant Count": prc,
+                "Participation %": part_pct,
+                "Representation Ratio": ratio,
+            }
+        )
     return pd.DataFrame(rows)
 
 
