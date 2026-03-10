@@ -85,8 +85,9 @@ with tab_report:
         height=150,
         help=(
             "Paste lines like 'dk33895 does not appear to have ever enrolled.' here. "
-            "These EIDs will be described in the report as outside the enrolled-student sample and "
-            "counted only as part of the irregular program environment, not in the main tables/charts."
+            "These EIDs will be described in the report as outside the enrolled-student sample. "
+            "They are counted only as part of the irregular program environment in the Regular vs "
+            "Irregular Program breakdown, not in the other tables/charts."
         ),
         key="never_enrolled_text",
     )

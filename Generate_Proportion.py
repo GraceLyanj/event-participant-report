@@ -503,9 +503,9 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
     )
     if never_enrolled_eids:
         doc.add_paragraph(
-            "Advisor Toolkit also reported the following EID(s) as not appearing to have ever enrolled; "
-            "they are treated as part of the irregular program environment and are not included in the "
-            "tables or charts below:"
+            "Advisor Toolkit also reported the following EID(s) as not appearing to have ever enrolled. "
+            "They are counted as part of the irregular program environment in the Regular vs Irregular "
+            "Program breakdown, but they are not included in the other tables or charts below."
         )
         doc.add_paragraph(", ".join(never_enrolled_eids))
 
@@ -522,7 +522,23 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
 
     # Irregular = something in 'Irregular Program' field (student from IP)
     df["Program Type"] = program_type_from_irregular_field(df)
-    categories.append((df["Program Type"], "Proportion of Regular vs Irregular Programs"))
+    # For program type proportions, also count each "never enrolled" EID as Irregular in the
+    # environment. They are only added to this Regular vs Irregular breakdown, not to the
+    # other demographic tables/charts.
+    if never_enrolled_eids:
+        program_series = pd.concat(
+            [
+                df["Program Type"],
+                pd.Series(
+                    ["Irregular"] * len(never_enrolled_eids),
+                    name="Program Type",
+                ),
+            ],
+            ignore_index=True,
+        )
+    else:
+        program_series = df["Program Type"]
+    categories.append((program_series, "Proportion of Regular vs Irregular Programs"))
 
     # Add formatted tables (one per category), with explicit sample sizes
     doc.add_heading('Summary tables', level=1)
