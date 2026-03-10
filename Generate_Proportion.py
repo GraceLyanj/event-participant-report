@@ -417,7 +417,27 @@ def clean_unknown_students(df):
         print(f"Cleaning: removed {removed} unknown or non-enrolled student row(s). Analyzed {n_after} students.")
     return df.reset_index(drop=True)
 
-def generate_report(event_csv_path, enrollment_reference_path=None):
+def _parse_never_enrolled_eids(raw_text):
+    """
+    Parse Advisor Toolkit messages like
+    'dk33895 does not appear to have ever enrolled.'
+    and return a sorted list of unique EIDs.
+    """
+    if not raw_text:
+        return []
+    eids = set()
+    for line in str(raw_text).splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        # Grab the first token before whitespace or '('
+        m = re.match(r"([A-Za-z0-9]+)", line)
+        if m:
+            eids.add(m.group(1))
+    return sorted(eids)
+
+
+def generate_report(event_csv_path, enrollment_reference_path=None, never_enrolled_notes=None):
     """
     Generate the Word report for a given event participants CSV.
 
@@ -429,6 +449,12 @@ def generate_report(event_csv_path, enrollment_reference_path=None):
         Optional path to the enrollment reference CSV. If None, the script
         will look for All_International_Students_Enrolled.csv in the event
         CSV directory, script directory, or user Downloads.
+    never_enrolled_notes : str or None, optional
+        Optional raw text from Advisor Toolkit listing EIDs that
+        "do not appear to have ever enrolled". These EIDs are described
+        in the report as outside the enrolled-student sample and counted
+        only as part of the irregular program environment; they are not
+        added to the event participant dataset.
 
     Returns
     -------
@@ -449,6 +475,10 @@ def generate_report(event_csv_path, enrollment_reference_path=None):
     df = clean_unknown_students(df)
     if len(df) == 0:
         raise ValueError("No students remaining after cleaning; cannot generate report.")
+    enrolled_n = len(df)
+
+    # Parse "never enrolled" EIDs from optional notes
+    never_enrolled_eids = _parse_never_enrolled_eids(never_enrolled_notes)
 
     # School proportions: by student count (graduate school can co-occur with other schools)
     csv_dir = os.path.dirname(os.path.abspath(event_csv_path))
@@ -465,7 +495,19 @@ def generate_report(event_csv_path, enrollment_reference_path=None):
 
     doc = Document()
     doc.add_heading('Event Participant Proportions Report', 0)
-    doc.add_paragraph(f'Source: {event_csv_path}')
+    doc.add_paragraph(f"Source: {event_csv_path}")
+    doc.add_paragraph(
+        f"All tables and charts in this report are based on N = {enrolled_n} enrolled student participant(s) "
+        "from the Advisor Toolkit export. Students with 'Never_Enrolled' status or missing names in the event "
+        "file are excluded from all analyses."
+    )
+    if never_enrolled_eids:
+        doc.add_paragraph(
+            "Advisor Toolkit also reported the following EID(s) as not appearing to have ever enrolled; "
+            "they are treated as part of the irregular program environment and are not included in the "
+            "tables or charts below:"
+        )
+        doc.add_paragraph(", ".join(never_enrolled_eids))
 
     # Build list of categories only for columns that actually exist
     categories = []
@@ -482,30 +524,49 @@ def generate_report(event_csv_path, enrollment_reference_path=None):
     df["Program Type"] = program_type_from_irregular_field(df)
     categories.append((df["Program Type"], "Proportion of Regular vs Irregular Programs"))
 
-    # Add formatted tables (one per category)
+    # Add formatted tables (one per category), with explicit sample sizes
     doc.add_heading('Summary tables', level=1)
     if not school_proportions_df.empty:
-        add_table_to_doc(doc, "Proportion of College/School (by student count)", school_proportions_df)
+        add_table_to_doc(
+            doc,
+            f"Proportion of College/School (by student count, N = {enrolled_n})",
+            school_proportions_df,
+        )
     for series, title in categories:
+        # Sample size for this category: non-missing, non-blank entries
+        valid = series.dropna().astype(str).str.strip()
+        valid_n = (valid != "").sum()
+        titled = f"{title} (N = {valid_n})"
         counts, proportions, tbl = get_proportions_df(series)
-        add_table_to_doc(doc, title, tbl)
+        add_table_to_doc(doc, titled, tbl)
 
-    # Add pie chart for each category (labels in legend to avoid overlapping)
+    # Add pie chart for each category (labels in legend to avoid overlapping), with sample sizes
     doc.add_heading('Charts', level=1)
     if not school_counts.empty:
-        doc.add_heading("Proportion of College/School (by student count)", level=2)
-        doc.add_picture(pie_chart_to_bytes(school_counts, "Proportion of College/School (by student count)"), width=Inches(5.5))
+        chart_title = f"Proportion of College/School (by student count, N = {enrolled_n})"
+        doc.add_heading(chart_title, level=2)
+        doc.add_picture(
+            pie_chart_to_bytes(school_counts, chart_title),
+            width=Inches(5.5),
+        )
     for series, title in categories:
         counts = series.value_counts(dropna=False)
-        doc.add_heading(title, level=2)
-        doc.add_picture(pie_chart_to_bytes(counts, title), width=Inches(5.5))
+        # Match heading/sample size used in tables
+        valid = series.dropna().astype(str).str.strip()
+        valid_n = (valid != "").sum()
+        chart_title = f"{title} (N = {valid_n})"
+        doc.add_heading(chart_title, level=2)
+        doc.add_picture(
+            pie_chart_to_bytes(counts, chart_title),
+            width=Inches(5.5),
+        )
 
     # Comparison to international enrollment (if reference file provided or found)
     enrollment_path = resolve_enrollment_path(csv_dir, script_dir, enrollment_reference_path)
     if enrollment_path and not school_counts.empty:
         enrollment_counts, total_enrollment = load_enrollment_by_school(enrollment_path, code_to_school)
         if total_enrollment > 0 and not enrollment_counts.empty:
-            total_participants = len(df)
+            total_participants = enrolled_n
             comparison_df = build_representation_comparison(
                 school_counts, total_participants, enrollment_counts, total_enrollment
             )

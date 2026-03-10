@@ -55,7 +55,7 @@ with tab_report:
 1. After you copy the EID list, use it in Advisor Toolkit to pull the latest data.
 2. In Advisor Toolkit, include at least these fields in your report: **Major**, **Pseudo School(s)**, **Gender**, **Citizenship** (US citizen, PR, or international), and **Irregular Program** (e.g., Option III).
 3. Generate the report and download it as a CSV.
-4. Upload the CSV file you downloaded from Advisor Toolkit. The app will generate a Word report with tables and charts, using enrollment data (All_International_Students_Enrolled.csv) for comparison.
+4. Upload the CSV file you downloaded from Advisor Toolkit. The app will generate a Word report with tables and charts, using a built-in enrollment reference file (All_International_Students_Enrolled.csv committed with this app) to add a comparison section (enrollment % vs participation % by school).
 
 ### Event participants CSV
 
@@ -79,6 +79,18 @@ with tab_report:
         key="event_file",
     )
 
+    never_enrolled_text = st.text_area(
+        "Optional: paste Advisor Toolkit messages for EIDs that do not appear to have ever enrolled",
+        value="",
+        height=150,
+        help=(
+            "Paste lines like 'dk33895 does not appear to have ever enrolled.' here. "
+            "These EIDs will be described in the report as outside the enrolled-student sample and "
+            "counted only as part of the irregular program environment, not in the main tables/charts."
+        ),
+        key="never_enrolled_text",
+    )
+
     generate_clicked = st.button("Generate report", key="generate_report_button")
 
     if generate_clicked:
@@ -91,8 +103,13 @@ with tab_report:
                 with open(event_path, "wb") as f:
                     f.write(event_file.read())
 
+                # Hard-code the enrollment reference to the copy committed with the app.
+                # If this file is missing in the deployed environment, the comparison
+                # section will be skipped but the main report will still be generated.
+                enrollment_path = os.path.join(os.path.dirname(__file__), "All_International_Students_Enrolled.csv")
+
                 try:
-                    report_path = generate_report(event_path, None)
+                    report_path = generate_report(event_path, enrollment_path, never_enrolled_text or None)
                 except Exception as e:
                     st.error(f"Error while generating report: {e}")
                 else:
