@@ -196,7 +196,13 @@ def _parse_schools_from_cell(val, code_to_school):
         m = re.search(r"\(([^)]+)\)", s)
         if m:
             code = m.group(1).strip()
-            result.add(code_to_school.get(code, s))
+            if code_to_school:
+                # If we have a lookup, use it; otherwise fall back to stripping the code
+                # and keeping only the school name text so it can match the enrollment CSV.
+                result.add(code_to_school.get(code, s))
+            else:
+                school_name = s[m.end():].strip() or s
+                result.add(school_name)
         else:
             result.add(s)
     return result
