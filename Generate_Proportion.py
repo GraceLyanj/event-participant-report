@@ -89,6 +89,25 @@ SCHOOL_LOOKUP_FILENAME = "COLA Toolkit, Spring 2026.csv"
 ENROLLMENT_REFERENCE_FILENAME = "All_International_Students_Enrolled.csv"
 
 
+DEFAULT_ENROLLMENT_ROWS = [
+    ("Natural Sciences", 2389),
+    ("Engineering", 1421),
+    ("Liberal Arts", 1076),
+    ("Business Administration", 622),
+    ("Communication", 233),
+    ("Education", 215),
+    ("Information", 181),
+    ("Fine Arts", 164),
+    ("Inter-Department", 96),
+    ("Architecture", 92),
+    ("Geosciences", 82),
+    ("Law School", 76),
+    ("Pharmacy", 68),
+    ("Public Affairs", 39),
+    ("Nursing", 23),
+    ("Social Work", 19),
+]
+
 def resolve_school_lookup_path(csv_dir, script_dir=None):
     """Return path to school lookup file if it exists in script dir, CSV dir, or user Downloads."""
     candidates = []
@@ -251,6 +270,17 @@ def load_enrollment_by_school(path, code_to_school):
         total = len(enr)
         return counts_series, total
     return pd.Series(dtype=object), 0
+
+
+def load_default_enrollment_by_school():
+    """Return hard-coded international enrollment counts by school (for Streamlit fallback)."""
+    if not DEFAULT_ENROLLMENT_ROWS:
+        return pd.Series(dtype=object), 0
+    schools = [name for (name, count) in DEFAULT_ENROLLMENT_ROWS]
+    counts = [int(count) for (name, count) in DEFAULT_ENROLLMENT_ROWS]
+    series = pd.Series(counts, index=schools)
+    total = int(series.sum())
+    return series, total
 
 
 def build_representation_comparison(participation_counts, total_participants, enrollment_counts, total_enrollment):
@@ -577,26 +607,30 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
             width=Inches(5.5),
         )
 
-    # Comparison to international enrollment (if reference file provided or found)
+    # Comparison to international enrollment (use explicit file if available, otherwise hard-coded default)
+    enrollment_counts = pd.Series(dtype=object)
+    total_enrollment = 0
     enrollment_path = resolve_enrollment_path(csv_dir, script_dir, enrollment_reference_path)
-    if enrollment_path and not school_counts.empty:
+    if enrollment_path and os.path.isfile(enrollment_path):
         enrollment_counts, total_enrollment = load_enrollment_by_school(enrollment_path, code_to_school)
-        if total_enrollment > 0 and not enrollment_counts.empty:
-            total_participants = enrolled_n
-            comparison_df = build_representation_comparison(
-                school_counts, total_participants, enrollment_counts, total_enrollment
-            )
-            doc.add_heading("Comparison to International Enrollment (by School)", level=1)
+    if total_enrollment <= 0 or enrollment_counts.empty:
+        enrollment_counts, total_enrollment = load_default_enrollment_by_school()
+
+    if not school_counts.empty and total_enrollment > 0 and not enrollment_counts.empty:
+        total_participants = enrolled_n
+        comparison_df = build_representation_comparison(
+            school_counts, total_participants, enrollment_counts, total_enrollment
+        )
+        doc.add_heading("Comparison to International Enrollment (by School)", level=1)
+        if enrollment_path and os.path.isfile(enrollment_path):
             doc.add_paragraph(f"Enrollment reference: {enrollment_path}")
-            comparison_table_to_doc(doc, comparison_df)
-            doc.add_heading("Enrollment % vs Participation %", level=2)
-            doc.add_picture(side_by_side_bar_chart_bytes(comparison_df), width=Inches(5.5))
-            doc.add_heading("Representation Ratio & Over/Under by School", level=2)
-            doc.add_picture(representation_ratio_chart_bytes(comparison_df, title="Representation Ratio & Over/Under by School"), width=Inches(5.5))
         else:
-            print("Enrollment file found but no enrollment counts by school; skipping comparison section.")
-    elif not school_counts.empty:
-        print("No enrollment reference file found; comparison section omitted. Place All_International_Students_Enrolled.csv in the CSV dir or pass it as second argument.")
+            doc.add_paragraph("Enrollment reference: built-in international enrollment counts (hard-coded in this tool).")
+        comparison_table_to_doc(doc, comparison_df)
+        doc.add_heading("Enrollment % vs Participation %", level=2)
+        doc.add_picture(side_by_side_bar_chart_bytes(comparison_df), width=Inches(5.5))
+        doc.add_heading("Representation Ratio & Over/Under by School", level=2)
+        doc.add_picture(representation_ratio_chart_bytes(comparison_df, title="Representation Ratio & Over/Under by School"), width=Inches(5.5))
 
     try:
         doc.save(out_docx)
