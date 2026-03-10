@@ -109,7 +109,14 @@ with tab_report:
                 enrollment_path = os.path.join(os.path.dirname(__file__), "All_International_Students_Enrolled.csv")
 
                 try:
-                    report_path = generate_report(event_path, enrollment_path, never_enrolled_text or None)
+                    # Pass the 'never enrolled' notes as a keyword argument so the
+                    # call site stays clear and compatible with the updated
+                    # generate_report signature.
+                    report_path = generate_report(
+                        event_path,
+                        enrollment_path,
+                        never_enrolled_notes=never_enrolled_text or None,
+                    )
                 except Exception as e:
                     st.error(f"Error while generating report: {e}")
                 else:
