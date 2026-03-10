@@ -88,25 +88,30 @@ SCHOOL_LOOKUP_FILENAME = "COLA Toolkit, Spring 2026.csv"
 # Enrollment reference for representation comparison (optional)
 ENROLLMENT_REFERENCE_FILENAME = "All_International_Students_Enrolled.csv"
 
+# Built‑in code → school mapping (used if no external lookup file is present).
+DEFAULT_SCHOOL_CODE_LOOKUP = {
+    "2": "Business Administration",
+    "3": "Education",
+    "4": "Engineering",
+    "5": "Fine Arts",
+    "6": "Graduate School",
+    "7": "Law School",
+    "8": "Pharmacy",
+    "9": "Architecture",
+    "B": "Graduate Business",
+    "C": "Communication",
+    "E": "Natural Sciences",
+    "F": "Civic Leadership",
+    "J": "Geosciences",
+    "L": "Liberal Arts",
+    "M": "Medical School",
+    "N": "Nursing",
+    "P": "Information",
+    "S": "Social Work",
+    "T": "Public Affairs",
+    "U": "Undergraduate Studies",
+}
 
-DEFAULT_ENROLLMENT_ROWS = [
-    ("Natural Sciences", 2389),
-    ("Engineering", 1421),
-    ("Liberal Arts", 1076),
-    ("Business Administration", 622),
-    ("Communication", 233),
-    ("Education", 215),
-    ("Information", 181),
-    ("Fine Arts", 164),
-    ("Inter-Department", 96),
-    ("Architecture", 92),
-    ("Geosciences", 82),
-    ("Law School", 76),
-    ("Pharmacy", 68),
-    ("Public Affairs", 39),
-    ("Nursing", 23),
-    ("Social Work", 19),
-]
 
 def resolve_school_lookup_path(csv_dir, script_dir=None):
     """Return path to school lookup file if it exists in script dir, CSV dir, or user Downloads."""
@@ -139,27 +144,32 @@ def resolve_enrollment_path(csv_dir, script_dir=None, explicit_path=None):
 
 
 def load_school_lookup(path):
-    """Load school code -> official school name mapping from a lookup CSV."""
+    """Load school code -> official school name mapping from a lookup CSV, layered over defaults."""
+    mapping = dict(DEFAULT_SCHOOL_CODE_LOOKUP)
+    if not path:
+        return mapping
     try:
         lut = pd.read_csv(path)
     except FileNotFoundError:
-        return {}
+        return mapping
 
     lut.columns = lut.columns.str.strip()
     if not {"Code", "School"}.issubset(lut.columns):
-        print(f"School lookup file {path} is missing 'Code' or 'School' columns. Using pseudo school names as-is.")
-        return {}
+        print(f"School lookup file {path} is missing 'Code' or 'School' columns. Using built‑in school code mapping.")
+        return mapping
 
     lut = lut[
         (lut["Code"].astype(str).str.strip() != "")
         & (lut["School"].astype(str).str.strip() != "")
     ]
-    return dict(
+    csv_mapping = dict(
         zip(
             lut["Code"].astype(str).str.strip(),
             lut["School"].astype(str).str.strip(),
         )
     )
+    mapping.update(csv_mapping)
+    return mapping
 
 
 def translate_pseudo_school(series, code_to_school):
@@ -196,13 +206,7 @@ def _parse_schools_from_cell(val, code_to_school):
         m = re.search(r"\(([^)]+)\)", s)
         if m:
             code = m.group(1).strip()
-            if code_to_school:
-                # If we have a lookup, use it; otherwise fall back to stripping the code
-                # and keeping only the school name text so it can match the enrollment CSV.
-                result.add(code_to_school.get(code, s))
-            else:
-                school_name = s[m.end():].strip() or s
-                result.add(school_name)
+            result.add(code_to_school.get(code, s))
         else:
             result.add(s)
     return result
@@ -220,8 +224,15 @@ def student_based_school_proportions(df, code_to_school):
     if total_students == 0:
         return pd.Series(dtype=object), pd.DataFrame(columns=["Category", "Count", "Proportion"])
 
-    col1 = "Pseudo Sch1"
-    col2 = "Pseudo Sch2" if "Pseudo Sch2" in df.columns else None
+    # Be flexible about pseudo school column names (e.g. 'Pseudo Sch1', 'Pseudo Sch Maj1', etc.).
+    pseudo_cols = [
+        c for c in df.columns if c.strip().lower().startswith("pseudo sch")
+    ]
+    if not pseudo_cols:
+        return pd.Series(dtype=object), pd.DataFrame(columns=["Category", "Count", "Proportion"])
+
+    col1 = pseudo_cols[0]
+    col2 = pseudo_cols[1] if len(pseudo_cols) > 1 else None
     student_school_counts = Counter()
     for idx, row in df.iterrows():
         schools = _parse_schools_from_cell(row[col1], code_to_school)
@@ -276,17 +287,6 @@ def load_enrollment_by_school(path, code_to_school):
         total = len(enr)
         return counts_series, total
     return pd.Series(dtype=object), 0
-
-
-def load_default_enrollment_by_school():
-    """Return hard-coded international enrollment counts by school (for Streamlit fallback)."""
-    if not DEFAULT_ENROLLMENT_ROWS:
-        return pd.Series(dtype=object), 0
-    schools = [name for (name, count) in DEFAULT_ENROLLMENT_ROWS]
-    counts = [int(count) for (name, count) in DEFAULT_ENROLLMENT_ROWS]
-    series = pd.Series(counts, index=schools)
-    total = int(series.sum())
-    return series, total
 
 
 def build_representation_comparison(participation_counts, total_participants, enrollment_counts, total_enrollment):
@@ -520,10 +520,7 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
     csv_dir = os.path.dirname(os.path.abspath(event_csv_path))
     school_lookup_path = resolve_school_lookup_path(csv_dir, script_dir)
     code_to_school = load_school_lookup(school_lookup_path) if school_lookup_path else {}
-    if "Pseudo Sch1" in df.columns:
-        school_counts, school_proportions_df = student_based_school_proportions(df, code_to_school)
-    else:
-        school_counts, school_proportions_df = pd.Series(dtype=object), pd.DataFrame(columns=["Category", "Count", "Proportion"])
+    school_counts, school_proportions_df = student_based_school_proportions(df, code_to_school)
 
     base = os.path.splitext(os.path.basename(event_csv_path))[0]
     out_dir = os.path.dirname(os.path.abspath(event_csv_path))
@@ -613,30 +610,26 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
             width=Inches(5.5),
         )
 
-    # Comparison to international enrollment (use explicit file if available, otherwise hard-coded default)
-    enrollment_counts = pd.Series(dtype=object)
-    total_enrollment = 0
+    # Comparison to international enrollment (if reference file provided or found)
     enrollment_path = resolve_enrollment_path(csv_dir, script_dir, enrollment_reference_path)
-    if enrollment_path and os.path.isfile(enrollment_path):
+    if enrollment_path and not school_counts.empty:
         enrollment_counts, total_enrollment = load_enrollment_by_school(enrollment_path, code_to_school)
-    if total_enrollment <= 0 or enrollment_counts.empty:
-        enrollment_counts, total_enrollment = load_default_enrollment_by_school()
-
-    if not school_counts.empty and total_enrollment > 0 and not enrollment_counts.empty:
-        total_participants = enrolled_n
-        comparison_df = build_representation_comparison(
-            school_counts, total_participants, enrollment_counts, total_enrollment
-        )
-        doc.add_heading("Comparison to International Enrollment (by School)", level=1)
-        if enrollment_path and os.path.isfile(enrollment_path):
+        if total_enrollment > 0 and not enrollment_counts.empty:
+            total_participants = enrolled_n
+            comparison_df = build_representation_comparison(
+                school_counts, total_participants, enrollment_counts, total_enrollment
+            )
+            doc.add_heading("Comparison to International Enrollment (by School)", level=1)
             doc.add_paragraph(f"Enrollment reference: {enrollment_path}")
+            comparison_table_to_doc(doc, comparison_df)
+            doc.add_heading("Enrollment % vs Participation %", level=2)
+            doc.add_picture(side_by_side_bar_chart_bytes(comparison_df), width=Inches(5.5))
+            doc.add_heading("Representation Ratio & Over/Under by School", level=2)
+            doc.add_picture(representation_ratio_chart_bytes(comparison_df, title="Representation Ratio & Over/Under by School"), width=Inches(5.5))
         else:
-            doc.add_paragraph("Enrollment reference: built-in international enrollment counts (hard-coded in this tool).")
-        comparison_table_to_doc(doc, comparison_df)
-        doc.add_heading("Enrollment % vs Participation %", level=2)
-        doc.add_picture(side_by_side_bar_chart_bytes(comparison_df), width=Inches(5.5))
-        doc.add_heading("Representation Ratio & Over/Under by School", level=2)
-        doc.add_picture(representation_ratio_chart_bytes(comparison_df, title="Representation Ratio & Over/Under by School"), width=Inches(5.5))
+            print("Enrollment file found but no enrollment counts by school; skipping comparison section.")
+    elif not school_counts.empty:
+        print("No enrollment reference file found; comparison section omitted. Place All_International_Students_Enrolled.csv in the CSV dir or pass it as second argument.")
 
     try:
         doc.save(out_docx)
