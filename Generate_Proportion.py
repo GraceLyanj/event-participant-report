@@ -727,14 +727,23 @@ def _parse_never_enrolled_eids(raw_text):
     return sorted(eids)
 
 
+def _normalize_event_csv_paths(event_csv_path):
+    """Return a non-empty list of path strings (str or PathLike -> single-element list)."""
+    if isinstance(event_csv_path, (str, os.PathLike)):
+        return [os.fspath(event_csv_path)]
+    return [os.fspath(p) for p in event_csv_path]
+
+
 def generate_report(event_csv_path, enrollment_reference_path=None, never_enrolled_notes=None):
     """
-    Generate the Word report for a given event participants CSV.
+    Generate the Word report for one or more event participants CSVs (combined into one report).
 
     Parameters
     ----------
-    event_csv_path : str
-        Path to the event participants CSV.
+    event_csv_path : str, os.PathLike, or sequence of those
+        Path to the event participants CSV, or several paths. Rows from all
+        files are concatenated in order, then cleaned and deduplicated by EID
+        (first occurrence wins across files).
     enrollment_reference_path : str or None, optional
         Optional path to the enrollment reference CSV. If None, the script
         will look for All_International_Students_Enrolled.csv in the event
@@ -752,14 +761,20 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
         Path to the generated .docx report.
     """
     script_dir = os.path.dirname(os.path.abspath(sys.argv[0])) if sys.argv else os.getcwd()
+    event_paths = _normalize_event_csv_paths(event_csv_path)
+    if not event_paths:
+        raise ValueError("At least one event participants CSV path is required.")
 
-    try:
-        df = pd.read_csv(event_csv_path)
-    except FileNotFoundError:
-        print(f"File not found: {event_csv_path}")
-        raise
-
-    df.columns = df.columns.str.strip()
+    frames = []
+    for p in event_paths:
+        try:
+            chunk = pd.read_csv(p)
+        except FileNotFoundError:
+            print(f"File not found: {p}")
+            raise
+        chunk.columns = chunk.columns.str.strip()
+        frames.append(chunk)
+    df = pd.concat(frames, ignore_index=True)
 
     # Clean before any analysis
     df = clean_unknown_students(df)
@@ -772,21 +787,32 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
     never_enrolled_eids = _parse_never_enrolled_eids(never_enrolled_notes)
 
     # School proportions: denominator = unique EIDs (one row per EID; multi-school cells count in each school)
-    csv_dir = os.path.dirname(os.path.abspath(event_csv_path))
+    primary_path = event_paths[0]
+    csv_dir = os.path.dirname(os.path.abspath(primary_path))
     school_lookup_path = resolve_school_lookup_path(csv_dir, script_dir)
     code_to_school = load_school_lookup(school_lookup_path) if school_lookup_path else {}
     school_counts, school_proportions_df = student_based_school_proportions(df, code_to_school)
 
-    base = os.path.splitext(os.path.basename(event_csv_path))[0]
-    out_dir = os.path.dirname(os.path.abspath(event_csv_path))
+    if len(event_paths) == 1:
+        base = os.path.splitext(os.path.basename(event_paths[0]))[0]
+    else:
+        stem0 = os.path.splitext(os.path.basename(primary_path))[0]
+        base = f"{stem0}_merged_{len(event_paths)}files"
+    out_dir = os.path.dirname(os.path.abspath(primary_path))
     out_docx = os.path.join(out_dir, f"{base}_report.docx")
 
     doc = Document()
     doc.add_heading('Event Participant Proportions Report', 0)
-    doc.add_paragraph(f"Source: {event_csv_path}")
+    if len(event_paths) == 1:
+        doc.add_paragraph(f"Source: {event_paths[0]}")
+    else:
+        doc.add_paragraph("Sources (combined in this order):")
+        for p in event_paths:
+            doc.add_paragraph(f"• {p}")
+    file_phrase = "file" if len(event_paths) == 1 else "files (concatenated in order, then deduplicated)"
     doc.add_paragraph(
-        f"This report is based on N = {n_unique_eids} unique EID(s) from the event participant file (not on enrollment "
-        "status). Duplicate rows for the same EID are dropped; the kept row is the first in the file. "
+        f"This report is based on N = {n_unique_eids} unique EID(s) from the event participant {file_phrase} (not on enrollment "
+        "status). Duplicate rows for the same EID are dropped; the kept row is the first across the combined data. "
         "Rows with missing names are excluded before deduplication. Missing demographic values are shown as Unknown. "
         "For Program Type, rows with Derived Academic Status Never_Enrolled are Unknown only when they have no ESL "
         "signal (major/school/Irregular Program) and no other Irregular Program label; ESL is prioritized over Unknown."
@@ -897,15 +923,51 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
         return alt_path
 
 
+def _looks_like_enrollment_reference_path(path):
+    """Guess whether a path is the international enrollment extract (vs another participant export)."""
+    b = os.path.basename(os.fspath(path)).lower()
+    if "enroll" in b:
+        return True
+    if "international" in b and "student" in b:
+        return True
+    return False
+
+
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python Generate_Proportion.py <event_participants.csv> [enrollment_reference.csv]")
-        print("  If enrollment_reference.csv is omitted, looks for All_International_Students_Enrolled.csv in the same dir, script dir, or Downloads.")
+        print("Usage: python Generate_Proportion.py <event_participants.csv> [more.csv ...] [enrollment_reference.csv]")
+        print("  Combine multiple participant lists: list each CSV in order (see below).")
+        print("  Enrollment file: pass as the last argument if its name suggests enrollment (e.g. contains 'enroll' or 'international'+'student'),")
+        print("  or use: python Generate_Proportion.py file1.csv file2.csv -- path/to/enrollment.csv")
+        print("  If enrollment is omitted, looks for All_International_Students_Enrolled.csv in the first CSV's dir, script dir, or Downloads.")
         sys.exit(1)
 
-    filename = sys.argv[1]
-    enrollment_explicit = sys.argv[2] if len(sys.argv) > 2 else None
-    generate_report(filename, enrollment_explicit)
+    args = sys.argv[1:]
+    enrollment_explicit = None
+    if "--" in args:
+        i = args.index("--")
+        event_args = args[:i]
+        rest = args[i + 1 :]
+        if not event_args:
+            print("Error: no event CSV path(s) before --.")
+            sys.exit(1)
+        if rest:
+            enrollment_explicit = rest[0]
+            if len(rest) > 1:
+                print("Note: ignoring extra arguments after enrollment path:", " ".join(rest[1:]))
+    elif len(args) == 1:
+        event_args = args
+    elif len(args) == 2:
+        # Backward compatible: event + enrollment
+        event_args = [args[0]]
+        enrollment_explicit = args[1]
+    elif _looks_like_enrollment_reference_path(args[-1]):
+        event_args = args[:-1]
+        enrollment_explicit = args[-1]
+    else:
+        event_args = args
+
+    generate_report(event_args, enrollment_explicit)
 
 if __name__ == "__main__":
     main()

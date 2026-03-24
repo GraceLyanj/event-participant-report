@@ -55,7 +55,7 @@ with tab_report:
 1. After you copy the EID list, use it in Advisor Toolkit to pull the latest data.
 2. In Advisor Toolkit, include at least these fields in your report: **Major**, **Pseudo School(s)**, **Gender**, **Citizenship** (US citizen, PR, or international), and **Irregular Program** (e.g., Option III).
 3. Generate the report and download it as a CSV.
-4. Upload the CSV file you downloaded from Advisor Toolkit. The app will generate a Word report with tables and charts, using a built-in enrollment reference file (All_International_Students_Enrolled.csv committed with this app) to add a comparison section (enrollment % vs participation % by school).
+4. Upload the CSV file(s) you downloaded from Advisor Toolkit (you can select several files to merge into one report; order is preserved, then duplicate EIDs are collapsed to the first row). The app will generate a Word report with tables and charts, using a built-in enrollment reference file (All_International_Students_Enrolled.csv committed with this app) to add a comparison section (enrollment % vs participation % by school).
 
 ### Event participants CSV
 
@@ -71,25 +71,31 @@ with tab_report:
 """
     )
 
-    event_file = st.file_uploader(
-        "Upload event participants CSV",
+    event_files = st.file_uploader(
+        "Upload event participants CSV(s)",
         type=["csv"],
-        accept_multiple_files=False,
-        help="This should be the CSV you currently pass to Generate_Proportion.py.",
+        accept_multiple_files=True,
+        help="One or more Advisor Toolkit exports; combined in upload order (same as Generate_Proportion.py with multiple paths).",
         key="event_file",
     )
 
     generate_clicked = st.button("Generate report", key="generate_report_button")
 
     if generate_clicked:
-        if event_file is None:
-            st.warning("Please upload an event participants CSV first.")
+        if not event_files:
+            st.warning("Please upload at least one event participants CSV first.")
             st.stop()
         with st.spinner("Generating report..."):
             with tempfile.TemporaryDirectory() as tmpdir:
-                event_path = os.path.join(tmpdir, event_file.name)
-                with open(event_path, "wb") as f:
-                    f.write(event_file.read())
+                event_paths = []
+                for i, ef in enumerate(event_files):
+                    name = ef.name
+                    if len(event_files) > 1:
+                        name = f"{i:02d}_{name}"
+                    event_path = os.path.join(tmpdir, name)
+                    with open(event_path, "wb") as f:
+                        f.write(ef.read())
+                    event_paths.append(event_path)
 
                 # Hard-code the enrollment reference to the copy committed with the app.
                 # If this file is missing in the deployed environment, the comparison
@@ -101,7 +107,7 @@ with tab_report:
                     # call site stays clear and compatible with the updated
                     # generate_report signature.
                     report_path = generate_report(
-                        event_path,
+                        event_paths,
                         enrollment_path,
                     )
                 except Exception as e:
