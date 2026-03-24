@@ -727,11 +727,38 @@ def _parse_never_enrolled_eids(raw_text):
     return sorted(eids)
 
 
+def _flatten_event_csv_paths(obj):
+    """
+    Yield filesystem path strings from a str, PathLike, or nested iterable of those.
+
+    str is not treated as iterable (so we do not split into characters). This avoids
+    passing a nested list into pd.read_csv(), which raises:
+    ValueError: Invalid file path or buffer object type: <class 'list'>.
+    """
+    if isinstance(obj, str):
+        yield obj
+        return
+    if isinstance(obj, os.PathLike):
+        yield os.fspath(obj)
+        return
+    if isinstance(obj, (bytes, bytearray)):
+        yield os.fspath(obj)
+        return
+    try:
+        it = iter(obj)
+    except TypeError as e:
+        raise TypeError(
+            f"Expected a path or iterable of paths, got {type(obj).__name__}"
+        ) from e
+    for item in it:
+        yield from _flatten_event_csv_paths(item)
+
+
 def _normalize_event_csv_paths(event_csv_path):
-    """Return a non-empty list of path strings (str or PathLike -> single-element list)."""
-    if isinstance(event_csv_path, (str, os.PathLike)):
-        return [os.fspath(event_csv_path)]
-    return [os.fspath(p) for p in event_csv_path]
+    """Return a list of path strings (str or PathLike -> single-element list; nested lists flattened)."""
+    if event_csv_path is None:
+        return []
+    return [p for p in _flatten_event_csv_paths(event_csv_path) if p]
 
 
 def generate_report(event_csv_path, enrollment_reference_path=None, never_enrolled_notes=None):
