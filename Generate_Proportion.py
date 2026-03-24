@@ -122,6 +122,26 @@ def _normalized_esl_key(val):
     return s.casefold()
 
 
+def canonicalize_school_display_name(name):
+    """School column: treat esl / ESL / Esl / esL (Unicode-folded) as one label 'ESL'."""
+    if name is None:
+        return name
+    try:
+        if pd.isna(name):
+            return name
+    except (TypeError, ValueError):
+        pass
+    s = str(name).strip()
+    if not s:
+        return s
+    if _normalized_esl_key(s) == "esl":
+        return "ESL"
+    m = re.match(r"^\([^)]+\)\s*(.+)$", s)
+    if m and _normalized_esl_key(m.group(1).strip()) == "esl":
+        return "ESL"
+    return s
+
+
 def program_type_from_irregular_field(df):
     """
     Program type rules for reporting:
@@ -281,9 +301,9 @@ def _parse_schools_from_cell(val, code_to_school):
         m = re.search(r"\(([^)]+)\)", s)
         if m:
             code = m.group(1).strip()
-            result.add(code_to_school.get(code, s))
+            result.add(canonicalize_school_display_name(code_to_school.get(code, s)))
         else:
-            result.add(s)
+            result.add(canonicalize_school_display_name(s))
     return result
 
 
@@ -353,8 +373,8 @@ def load_enrollment_by_school(path, code_to_school):
         )
         if count_col:
             enr = enr.dropna(subset=["School"])
-            enr["School"] = enr["School"].astype(str).str.strip()
-            enr = enr[enr["School"] != ""]
+            enr["School"] = enr["School"].map(canonicalize_school_display_name)
+            enr = enr[enr["School"].astype(str).str.strip() != ""]
             total_enrollment = int(enr[count_col].sum())
             enr = enr[~enr["School"].str.lower().str.strip().eq("graduate school")]
             counts = enr.groupby("School", as_index=True)[count_col].sum()
@@ -391,7 +411,8 @@ def build_representation_comparison(participation_counts, total_participants, en
     def _normalize_label(label: str) -> str:
         s = str(label).strip()
         m = re.match(r"\(([^)]+)\)\s*(.+)", s)
-        return m.group(2).strip() if m else s
+        core = m.group(2).strip() if m else s
+        return canonicalize_school_display_name(core)
 
     # Normalize and merge participation counts
     part_norm = {}
