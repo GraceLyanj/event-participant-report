@@ -68,6 +68,57 @@ def find_first_matching_column(df, candidates):
     return None
 
 
+def find_eid_column(df):
+    """Participant primary key: EID column (Toolkit exports vary by header spelling)."""
+    if df is None or df.empty:
+        return None
+    norm = {c.strip().lower(): c for c in df.columns}
+    for key in ("eid", "ut eid", "student eid", "empl eid", "emp eid", "utexas eid"):
+        if key in norm:
+            return norm[key]
+    col = find_first_matching_column(df, ["EID", "UT EID", "Student EID", "Empl EID"])
+    if col:
+        return col
+    for c in df.columns:
+        low = c.strip().lower()
+        if low == "eid" or ("eid" in low and "pseudo" not in low):
+            return c
+    return None
+
+
+def dedupe_participants_by_eid(df):
+    """
+    Ensure one row per EID so every chart/table uses the same person-level denominator.
+    Rows with missing EID are kept distinct (each counts separately). Duplicate EIDs keep the first row.
+    """
+    eid_col = find_eid_column(df)
+    if not eid_col:
+        print("No EID-like column found; rows are not deduplicated by person.")
+        return df.reset_index(drop=True)
+    out = df.copy()
+
+    def key_for(val, row_idx):
+        if val is None or (isinstance(val, float) and pd.isna(val)):
+            return f"__missing_eid_{row_idx}"
+        t = str(val).strip()
+        if t == "" or t.lower() == "nan":
+            return f"__missing_eid_{row_idx}"
+        return t.lower()
+
+    keys = [key_for(out.iloc[i][eid_col], i) for i in range(len(out))]
+    out["_eid_pk"] = keys
+    n0 = len(out)
+    out = out.drop_duplicates(subset=["_eid_pk"], keep="first")
+    out = out.drop(columns=["_eid_pk"])
+    dropped = n0 - len(out)
+    if dropped:
+        print(
+            f"Deduplicated by {eid_col!r}: dropped {dropped} extra row(s) for the same EID "
+            "(kept first occurrence)."
+        )
+    return out.reset_index(drop=True)
+
+
 def normalize_citizenship(series):
     """Keep uploaded citizenship labels as-is; only normalize missing to Unknown."""
     if series is None:
@@ -76,9 +127,25 @@ def normalize_citizenship(series):
 
 
 def normalize_unknown(series):
-    """Normalize blanks/missing values to 'Unknown' for reporting."""
+    """Normalize blanks/missing values to 'Unknown' for reporting (one category per field)."""
     s = series.astype(str).str.strip()
-    s = s.replace({"": pd.NA, "nan": pd.NA, "None": pd.NA, "none": pd.NA, "N/A": pd.NA, "n/a": pd.NA})
+    s = s.replace({"": pd.NA})
+    unk_tokens = {
+        "",
+        "nan",
+        "none",
+        "n/a",
+        "na",
+        "--",
+        "-",
+        ".",
+        "..",
+        "unknown",
+        "unk",
+        "null",
+        "<na>",
+    }
+    s = s.mask(s.str.lower().isin(unk_tokens), pd.NA)
     return s.fillna("Unknown")
 
 def add_table_to_doc(doc, title, df, style='Table Grid'):
@@ -690,6 +757,7 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
 
     # Clean before any analysis
     df = clean_unknown_students(df)
+    df = dedupe_participants_by_eid(df)
     if len(df) == 0:
         raise ValueError("No students remaining after cleaning; cannot generate report.")
     enrolled_n = len(df)
@@ -711,8 +779,9 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
     doc.add_heading('Event Participant Proportions Report', 0)
     doc.add_paragraph(f"Source: {event_csv_path}")
     doc.add_paragraph(
-        f"All tables and charts in this report are based on N = {enrolled_n} enrolled student participant(s) "
-        "from the Advisor Toolkit export. Rows with missing names are excluded. For Program Type, "
+        f"All tables and charts use N = {enrolled_n} participant(s), one count per EID (duplicate rows for the "
+        "same EID are dropped; kept row is the first in the file). Missing demographic values are shown as Unknown. "
+        "Rows with missing names are excluded before deduplication. For Program Type, "
         "Never_Enrolled students are Unknown only when they have no ESL signal (major/school/Irregular Program) "
         "and no other Irregular Program label; ESL is prioritized over Unknown."
     )
