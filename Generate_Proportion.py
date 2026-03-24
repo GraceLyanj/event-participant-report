@@ -244,7 +244,7 @@ def program_type_from_irregular_field(df):
     - Never_Enrolled: ESL (any signal) wins over Unknown; else keep a non-blank Irregular Program value;
       if neither ESL nor other irregular label (still Regular), use Unknown
     - ESL if Irregular Program, Major, or any Pseudo Sch cell indicates ESL / English as a Second Language
-      (overrides Regular and other irregular labels for enrolled students too)
+      (overrides Regular and other irregular labels when status is not Never_Enrolled)
     """
     status_col = next(
         (c for c in df.columns if c.strip().lower() == "derived academic status"),
@@ -255,7 +255,7 @@ def program_type_from_irregular_field(df):
         None,
     )
 
-    # Start as Regular for enrolled students; convert missing labels to Unknown later.
+    # Start as Regular when Irregular Program is blank; Never_Enrolled handled below.
     program = pd.Series(["Regular"] * len(df), index=df.index, dtype=object)
 
     irregular_esl_signal = pd.Series(False, index=df.index)
@@ -425,9 +425,9 @@ def _parse_schools_from_cell(val, code_to_school):
 
 def student_based_school_proportions(df, code_to_school):
     """
-    College/School proportions by student count: each student counts once in the denominator.
-    A student in multiple schools (e.g. Graduate + COLA) is counted in each of those schools;
-    proportions are (students in school X) / total_students, so they can sum to more than 100%.
+    College/School proportions: denominator is len(df) = one row per unique EID.
+    An EID in multiple schools (e.g. Graduate + COLA) is counted in each school;
+    proportions are (EIDs in school X) / total unique EIDs, so they can sum to more than 100%.
     Uses Pseudo Sch1 and Pseudo Sch2; cells with 'A/ B' are split into multiple schools.
     Returns (counts_series, proportions_df) for table/chart.
     """
@@ -507,6 +507,7 @@ def build_representation_comparison(participation_counts, total_participants, en
     """
     Build comparison table: Enrollment %, Participation %, Representation Ratio.
     Ratio = (Participation %) / (Enrollment %). ≈1 proportional, >1 overrepresented, <1 underrepresented.
+    total_participants must be the count of unique EIDs in the event file (same denominator as school proportions).
 
     If a school appears twice with and without a leading code, e.g.
     "(2)Business Administration" and "Business Administration", they are
@@ -518,7 +519,7 @@ def build_representation_comparison(participation_counts, total_participants, en
                 "School",
                 "Enrollment Count",
                 "Enrollment %",
-                "Participant Count",
+                "Participant EIDs",
                 "Participation %",
                 "Representation Ratio",
             ]
@@ -558,7 +559,7 @@ def build_representation_comparison(participation_counts, total_participants, en
                 "School": school,
                 "Enrollment Count": enc,
                 "Enrollment %": enr_pct,
-                "Participant Count": prc,
+                "Participant EIDs": prc,
                 "Participation %": part_pct,
                 "Representation Ratio": ratio,
             }
@@ -570,7 +571,12 @@ def comparison_table_to_doc(doc, df):
     """Add representation comparison table to document."""
     if df.empty:
         return
-    doc.add_paragraph("Enrollment % = (School Enrollment / Total Enrollment) × 100. Participation % = (School Participants / Total Participants) × 100. Ratio = Participation % / Enrollment % (≈1 proportional, >1 overrepresented, <1 underrepresented).", style="Normal")
+    doc.add_paragraph(
+        "Enrollment % = (School enrollment / total enrollment in reference file) × 100. "
+        "Participation % = (participant EIDs in school / total unique event EIDs) × 100. "
+        "Ratio = Participation % / Enrollment % (≈1 proportional, >1 overrepresented, <1 underrepresented).",
+        style="Normal",
+    )
     nrows, ncols = len(df) + 1, len(df.columns)
     table = doc.add_table(rows=nrows, cols=ncols)
     table.style = "Table Grid"
@@ -735,10 +741,10 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
         CSV directory, script directory, or user Downloads.
     never_enrolled_notes : str or None, optional
         Optional raw text from Advisor Toolkit listing EIDs that
-        "do not appear to have ever enrolled". These EIDs are described
-        in the report as outside the enrolled-student sample and counted
-        only as part of the irregular program environment; they are not
-        added to the event participant dataset.
+        "do not appear to have ever enrolled". Those EIDs are not rows in
+        the participant CSV; the report describes them separately and counts
+        each only in the irregular-program environment breakdown, not in N
+        for the other tables/charts (which use unique EIDs from the file).
 
     Returns
     -------
@@ -759,13 +765,13 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
     df = clean_unknown_students(df)
     df = dedupe_participants_by_eid(df)
     if len(df) == 0:
-        raise ValueError("No students remaining after cleaning; cannot generate report.")
-    enrolled_n = len(df)
+        raise ValueError("No rows remaining after cleaning; cannot generate report.")
+    n_unique_eids = len(df)
 
     # Parse "never enrolled" EIDs from optional notes
     never_enrolled_eids = _parse_never_enrolled_eids(never_enrolled_notes)
 
-    # School proportions: by student count (graduate school can co-occur with other schools)
+    # School proportions: denominator = unique EIDs (one row per EID; multi-school cells count in each school)
     csv_dir = os.path.dirname(os.path.abspath(event_csv_path))
     school_lookup_path = resolve_school_lookup_path(csv_dir, script_dir)
     code_to_school = load_school_lookup(school_lookup_path) if school_lookup_path else {}
@@ -779,11 +785,11 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
     doc.add_heading('Event Participant Proportions Report', 0)
     doc.add_paragraph(f"Source: {event_csv_path}")
     doc.add_paragraph(
-        f"All tables and charts use N = {enrolled_n} participant(s), one count per EID (duplicate rows for the "
-        "same EID are dropped; kept row is the first in the file). Missing demographic values are shown as Unknown. "
-        "Rows with missing names are excluded before deduplication. For Program Type, "
-        "Never_Enrolled students are Unknown only when they have no ESL signal (major/school/Irregular Program) "
-        "and no other Irregular Program label; ESL is prioritized over Unknown."
+        f"This report is based on N = {n_unique_eids} unique EID(s) from the event participant file (not on enrollment "
+        "status). Duplicate rows for the same EID are dropped; the kept row is the first in the file. "
+        "Rows with missing names are excluded before deduplication. Missing demographic values are shown as Unknown. "
+        "For Program Type, rows with Derived Academic Status Never_Enrolled are Unknown only when they have no ESL "
+        "signal (major/school/Irregular Program) and no other Irregular Program label; ESL is prioritized over Unknown."
     )
     # Build list of categories from the uploaded participant CSV only.
     categories = []
@@ -825,7 +831,7 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
     if not school_proportions_df.empty:
         add_table_to_doc(
             doc,
-            f"Proportion of College/School (by student count, N = {enrolled_n})",
+            f"Proportion of College/School (unique EIDs, N = {n_unique_eids})",
             school_proportions_df,
         )
     for series, title in categories:
@@ -839,7 +845,7 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
     # Add pie chart for each category (labels in legend to avoid overlapping), with sample sizes
     doc.add_heading('Charts', level=1)
     if not school_counts.empty:
-        chart_title = f"Proportion of College/School (by student count, N = {enrolled_n})"
+        chart_title = f"Proportion of College/School (unique EIDs, N = {n_unique_eids})"
         doc.add_heading(chart_title, level=2)
         doc.add_picture(
             pie_chart_to_bytes(school_counts, chart_title),
@@ -862,7 +868,7 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
     if enrollment_path and not school_counts.empty:
         enrollment_counts, total_enrollment = load_enrollment_by_school(enrollment_path, code_to_school)
         if total_enrollment > 0 and not enrollment_counts.empty:
-            total_participants = enrolled_n
+            total_participants = n_unique_eids  # unique EIDs from event file (denominator for participation %)
             comparison_df = build_representation_comparison(
                 school_counts, total_participants, enrollment_counts, total_enrollment
             )
