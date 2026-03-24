@@ -1,6 +1,7 @@
 import sys
 import os
 import re
+import unicodedata
 from collections import Counter
 # Check required packages first and give a clear fix if missing
 def _check_imports():
@@ -108,12 +109,25 @@ def _shade_cell(cell, fill_hex):
     shd.set(qn('w:fill'), fill_hex)
     cell._tc.get_or_add_tcPr().append(shd)
 
+# Invisible / odd space chars in exports (zero-width, BOM, NBSP) break naive "esl" == checks.
+_ESL_STRIP_INVISIBLE = re.compile(r"[\u200b-\u200d\ufeff\u00a0]+")
+
+
+def _normalized_esl_key(val):
+    """Fold Unicode + strip invisibles so ESL, ＥＳＬ, E\u200bSL, etc. match."""
+    if val is pd.NA or (isinstance(val, float) and pd.isna(val)):
+        return None
+    s = unicodedata.normalize("NFKC", str(val))
+    s = _ESL_STRIP_INVISIBLE.sub("", s).strip()
+    return s.casefold()
+
+
 def program_type_from_irregular_field(df):
     """
     Program type rules for reporting:
     - If Derived Academic Status is Never_Enrolled -> Unknown
     - Else if Irregular Program field is blank -> Regular
-    - Else use the exact Irregular Program value (e.g., ESL, Option III)
+    - Else use the Irregular Program value (e.g., Option III); ESL matches case-insensitively as "ESL"
     """
     status_col = next(
         (c for c in df.columns if c.strip().lower() == "derived academic status"),
@@ -130,7 +144,10 @@ def program_type_from_irregular_field(df):
     if irregular_col:
         raw = df[irregular_col].astype(str).str.strip()
         raw = raw.replace({"": pd.NA, "nan": pd.NA, "None": pd.NA, "none": pd.NA})
-        # If not blank, preserve exact category value from uploaded file.
+        esl_keys = raw.map(lambda x: _normalized_esl_key(x) if pd.notna(x) else pd.NA)
+        esl_mask = raw.notna() & esl_keys.eq("esl")
+        raw = raw.mask(esl_mask, "ESL")
+        # If not blank, preserve category value from uploaded file (ESL normalized above).
         program = raw.fillna("Regular")
 
     if status_col:
