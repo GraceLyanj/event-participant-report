@@ -173,11 +173,11 @@ def canonicalize_school_display_name(name):
 def program_type_from_irregular_field(df):
     """
     Program type rules for reporting:
-    - If Derived Academic Status is Never_Enrolled -> Unknown
-    - Else if Irregular Program field is blank -> Regular
-    - Else use the Irregular Program value (e.g., Option III); ESL matches case-insensitively as "ESL"
-    - If Major or any Pseudo Sch cell indicates ESL / English as a Second Language, Program Type is ESL
-      (overrides Irregular Program and Regular), except Never_Enrolled stays Unknown.
+    - Start from Irregular Program: blank -> Regular, else that value (short ESL spellings -> "ESL")
+    - Never_Enrolled: ESL (any signal) wins over Unknown; else keep a non-blank Irregular Program value;
+      if neither ESL nor other irregular label (still Regular), use Unknown
+    - ESL if Irregular Program, Major, or any Pseudo Sch cell indicates ESL / English as a Second Language
+      (overrides Regular and other irregular labels for enrolled students too)
     """
     status_col = next(
         (c for c in df.columns if c.strip().lower() == "derived academic status"),
@@ -191,20 +191,16 @@ def program_type_from_irregular_field(df):
     # Start as Regular for enrolled students; convert missing labels to Unknown later.
     program = pd.Series(["Regular"] * len(df), index=df.index, dtype=object)
 
+    irregular_esl_signal = pd.Series(False, index=df.index)
     if irregular_col:
         raw = df[irregular_col].astype(str).str.strip()
         raw = raw.replace({"": pd.NA, "nan": pd.NA, "None": pd.NA, "none": pd.NA})
+        irregular_esl_signal = df[irregular_col].map(_text_indicates_esl_program)
         esl_keys = raw.map(lambda x: _normalized_esl_key(x) if pd.notna(x) else pd.NA)
         esl_mask = raw.notna() & esl_keys.eq("esl")
         raw = raw.mask(esl_mask, "ESL")
         # If not blank, preserve category value from uploaded file (ESL normalized above).
         program = raw.fillna("Regular")
-
-    never_mask = pd.Series(False, index=df.index)
-    if status_col:
-        status = df[status_col].astype(str).str.strip().str.lower()
-        never_mask = status.eq("never_enrolled")
-        program.loc[never_mask] = "Unknown"
 
     major_col = find_first_matching_column(df, ["Maj1 Name", "Major", "Major Name"])
     major_esl = (
@@ -217,8 +213,16 @@ def program_type_from_irregular_field(df):
     for c in pseudo_cols:
         school_esl = school_esl | df[c].map(_text_indicates_esl_program)
 
-    esl_from_major_or_school = major_esl | school_esl
-    program.loc[esl_from_major_or_school & ~never_mask] = "ESL"
+    is_esl = irregular_esl_signal | major_esl | school_esl
+
+    never_mask = pd.Series(False, index=df.index)
+    if status_col:
+        status = df[status_col].astype(str).str.strip().str.lower()
+        never_mask = status.eq("never_enrolled")
+
+    # Never_Enrolled: Unknown only if no ESL and no other irregular label (still Regular from blank IP field).
+    program.loc[never_mask & ~is_esl & program.eq("Regular")] = "Unknown"
+    program.loc[is_esl] = "ESL"
 
     return normalize_unknown(program)
 
@@ -618,7 +622,7 @@ def pie_chart_to_bytes(counts, title, max_slices=12):
     return buf
 
 def clean_unknown_students(df):
-    """Remove invalid student rows (empty/missing names). Keep Never_Enrolled rows for Program Type = Unknown."""
+    """Remove invalid student rows (empty/missing names). Keep Never_Enrolled rows (Program Type uses ESL / Irregular / Unknown rules)."""
     n_before = len(df)
     # Drop rows with no name (empty or blank)
     if "Name" in df.columns:
@@ -708,8 +712,9 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
     doc.add_paragraph(f"Source: {event_csv_path}")
     doc.add_paragraph(
         f"All tables and charts in this report are based on N = {enrolled_n} enrolled student participant(s) "
-        "from the Advisor Toolkit export. Rows with missing names are excluded. In Program Type only, "
-        "students marked 'Never_Enrolled' are shown as Unknown."
+        "from the Advisor Toolkit export. Rows with missing names are excluded. For Program Type, "
+        "Never_Enrolled students are Unknown only when they have no ESL signal (major/school/Irregular Program) "
+        "and no other Irregular Program label; ESL is prioritized over Unknown."
     )
     # Build list of categories from the uploaded participant CSV only.
     categories = []
