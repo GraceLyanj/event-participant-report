@@ -79,19 +79,6 @@ with tab_report:
         key="event_file",
     )
 
-    never_enrolled_text = st.text_area(
-        "Optional: paste Advisor Toolkit messages for EIDs that do not appear to have ever enrolled",
-        value="",
-        height=150,
-        help=(
-            "Paste lines like 'dk33895 does not appear to have ever enrolled.' here. "
-            "These EIDs will be described in the report as outside the enrolled-student sample. "
-            "They are counted only as part of the irregular program environment in the Regular vs "
-            "Irregular Program breakdown, not in the other tables/charts."
-        ),
-        key="never_enrolled_text",
-    )
-
     generate_clicked = st.button("Generate report", key="generate_report_button")
 
     if generate_clicked:
@@ -116,7 +103,6 @@ with tab_report:
                     report_path = generate_report(
                         event_path,
                         enrollment_path,
-                        never_enrolled_notes=never_enrolled_text or None,
                     )
                 except Exception as e:
                     st.error(f"Error while generating report: {e}")
@@ -151,6 +137,14 @@ with tab_extract_eids:
         accept_multiple_files=True,
         help="Select all CSV files.",
         key="extract_eids_uploads",
+    )
+
+    st.text_area(
+        "Temporary pasteboard (Step 2 only)",
+        value="",
+        height=140,
+        help="Use this as a temporary scratch area while working in Step 2. This field is not used by extraction or report generation.",
+        key="step2_temporary_pasteboard",
     )
 
     extract_clicked = st.button("Extract EIDs", key="extract_eids_button")

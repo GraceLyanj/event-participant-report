@@ -48,6 +48,38 @@ def get_proportions_df(series):
     df = pd.DataFrame({'Category': counts.index.astype(str), 'Count': counts.values, 'Proportion': proportions.values})
     return counts, proportions, df
 
+
+def find_first_matching_column(df, candidates):
+    """Return first existing column from candidates (case-insensitive exact, then contains)."""
+    if df is None or df.empty:
+        return None
+    normalized = {c.strip().lower(): c for c in df.columns}
+    for candidate in candidates:
+        key = candidate.strip().lower()
+        if key in normalized:
+            return normalized[key]
+    for candidate in candidates:
+        key = candidate.strip().lower()
+        for col in df.columns:
+            low = col.strip().lower()
+            if key in low:
+                return col
+    return None
+
+
+def normalize_citizenship(series):
+    """Keep uploaded citizenship labels as-is; only normalize missing to Unknown."""
+    if series is None:
+        return series
+    return normalize_unknown(series)
+
+
+def normalize_unknown(series):
+    """Normalize blanks/missing values to 'Unknown' for reporting."""
+    s = series.astype(str).str.strip()
+    s = s.replace({"": pd.NA, "nan": pd.NA, "None": pd.NA, "none": pd.NA, "N/A": pd.NA, "n/a": pd.NA})
+    return s.fillna("Unknown")
+
 def add_table_to_doc(doc, title, df, style='Table Grid'):
     """Add a formatted Word table with a title."""
     doc.add_paragraph(title, style='Heading 2')
@@ -77,10 +109,36 @@ def _shade_cell(cell, fill_hex):
     cell._tc.get_or_add_tcPr().append(shd)
 
 def program_type_from_irregular_field(df):
-    """If 'Irregular Program' has any value, student is Irregular (IP); otherwise Regular."""
-    if "Irregular Program" not in df.columns:
-        return pd.Series(["Regular"] * len(df), index=df.index)
-    return df["Irregular Program"].astype(str).str.strip().replace("nan", "").replace("", pd.NA).notna().map({True: "Irregular", False: "Regular"})
+    """
+    Program type rules for reporting:
+    - If Derived Academic Status is Never_Enrolled -> Unknown
+    - Else if Irregular Program field is blank -> Regular
+    - Else use the exact Irregular Program value (e.g., ESL, Option III)
+    """
+    status_col = next(
+        (c for c in df.columns if c.strip().lower() == "derived academic status"),
+        None,
+    )
+    irregular_col = next(
+        (c for c in df.columns if c.strip().lower() == "irregular program"),
+        None,
+    )
+
+    # Start as Regular for enrolled students; convert missing labels to Unknown later.
+    program = pd.Series(["Regular"] * len(df), index=df.index, dtype=object)
+
+    if irregular_col:
+        raw = df[irregular_col].astype(str).str.strip()
+        raw = raw.replace({"": pd.NA, "nan": pd.NA, "None": pd.NA, "none": pd.NA})
+        # If not blank, preserve exact category value from uploaded file.
+        program = raw.fillna("Regular")
+
+    if status_col:
+        status = df[status_col].astype(str).str.strip().str.lower()
+        never_mask = status.eq("never_enrolled")
+        program.loc[never_mask] = "Unknown"
+
+    return normalize_unknown(program)
 
 
 # Embedded school lookup: script looks for this file in script dir, CSV dir, or Downloads
@@ -238,9 +296,12 @@ def student_based_school_proportions(df, code_to_school):
         schools = _parse_schools_from_cell(row[col1], code_to_school)
         if col2:
             schools |= _parse_schools_from_cell(row[col2], code_to_school)
-        for s in schools:
+        valid_schools = [s for s in schools if s and not _is_graduate_school(s)]
+        for s in valid_schools:
             if s and not _is_graduate_school(s):
                 student_school_counts[s] += 1
+        if not valid_schools:
+            student_school_counts["Unknown"] += 1
 
     if not student_school_counts:
         return pd.Series(dtype=object), pd.DataFrame(columns=["Category", "Count", "Proportion"])
@@ -474,19 +535,16 @@ def pie_chart_to_bytes(counts, title, max_slices=12):
     return buf
 
 def clean_unknown_students(df):
-    """Remove unknown/invalid student rows: empty rows and Never_Enrolled (unknown roster) entries."""
+    """Remove invalid student rows (empty/missing names). Keep Never_Enrolled rows for Program Type = Unknown."""
     n_before = len(df)
     # Drop rows with no name (empty or blank)
     if "Name" in df.columns:
         df = df[df["Name"].astype(str).str.strip().str.lower() != "nan"]
         df = df[df["Name"].astype(str).str.strip() != ""]
-    # Drop "Never_Enrolled" / unknown roster students
-    if "Derived Academic Status" in df.columns:
-        df = df[df["Derived Academic Status"].astype(str).str.strip().str.lower() != "never_enrolled"]
     n_after = len(df)
     removed = n_before - n_after
     if removed > 0:
-        print(f"Cleaning: removed {removed} unknown or non-enrolled student row(s). Analyzed {n_after} students.")
+        print(f"Cleaning: removed {removed} row(s) with missing student identity. Analyzed {n_after} students.")
     return df.reset_index(drop=True)
 
 def _parse_never_enrolled_eids(raw_text):
@@ -567,27 +625,23 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
     doc.add_paragraph(f"Source: {event_csv_path}")
     doc.add_paragraph(
         f"All tables and charts in this report are based on N = {enrolled_n} enrolled student participant(s) "
-        "from the Advisor Toolkit export. Students with 'Never_Enrolled' status or missing names in the event "
-        "file are excluded from all analyses."
+        "from the Advisor Toolkit export. Rows with missing names are excluded. In Program Type only, "
+        "students marked 'Never_Enrolled' are shown as Unknown."
     )
-    if never_enrolled_eids:
-        doc.add_paragraph(
-            "Advisor Toolkit also reported the following EID(s) as not appearing to have ever enrolled. "
-            "They are counted as part of the irregular program environment in the Regular vs Irregular "
-            "Program breakdown, but they are not included in the other tables or charts below."
-        )
-        doc.add_paragraph(", ".join(never_enrolled_eids))
-
-    # Build list of categories only for columns that actually exist
+    # Build list of categories from the uploaded participant CSV only.
     categories = []
-    column_title_pairs = [
-        ("Maj1 Name", "Proportion of Majors"),
-        ("Gender", "Proportion of Gender"),
-        ("Citizenship", "Proportion of Citizenship"),
-    ]
-    for col, title in column_title_pairs:
-        if col in df.columns:
-            categories.append((df[col], title))
+    major_col = find_first_matching_column(df, ["Maj1 Name", "Major", "Major Name"])
+    if major_col:
+        categories.append((normalize_unknown(df[major_col]), "Proportion of Majors"))
+
+    # Explicit demographic charts requested: Gender and Citizenship
+    gender_col = find_first_matching_column(df, ["Gender"])
+    if gender_col:
+        categories.append((normalize_unknown(df[gender_col]), "Proportion of Gender"))
+
+    citizenship_col = find_first_matching_column(df, ["Citizenship"])
+    if citizenship_col:
+        categories.append((normalize_unknown(normalize_citizenship(df[citizenship_col])), "Proportion of Citizenship"))
 
     # Irregular = something in 'Irregular Program' field (student from IP)
     df["Program Type"] = program_type_from_irregular_field(df)
@@ -607,7 +661,7 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
         )
     else:
         program_series = df["Program Type"]
-    categories.append((program_series, "Proportion of Regular vs Irregular Programs"))
+    categories.append((normalize_unknown(program_series), "Proportion of Regular vs Irregular Programs"))
 
     # Add formatted tables (one per category), with explicit sample sizes
     doc.add_heading('Summary tables', level=1)
