@@ -122,6 +122,34 @@ def _normalized_esl_key(val):
     return s.casefold()
 
 
+# Major / school text that implies ESL for Program Type (word token or full phrase).
+_ESL_TOKEN_IN_TEXT = re.compile(r"(?<!\w)esl(?!\w)", re.IGNORECASE)
+_ESL_LONG_PHRASE = re.compile(r"english\s+as\s+(?:a\s+)?second\s+language", re.IGNORECASE)
+
+
+def _text_indicates_esl_program(val):
+    """True if free text is ESL or describes English as a Second Language."""
+    if val is None:
+        return False
+    try:
+        if pd.isna(val):
+            return False
+    except (TypeError, ValueError):
+        pass
+    s = unicodedata.normalize("NFKC", str(val))
+    s = _ESL_STRIP_INVISIBLE.sub("", s).strip()
+    if not s:
+        return False
+    if _normalized_esl_key(s) == "esl":
+        return True
+    if _ESL_TOKEN_IN_TEXT.search(s):
+        return True
+    cf = re.sub(r"\s+", " ", s.casefold())
+    if _ESL_LONG_PHRASE.search(cf):
+        return True
+    return False
+
+
 def canonicalize_school_display_name(name):
     """School column: treat esl / ESL / Esl / esL (Unicode-folded) as one label 'ESL'."""
     if name is None:
@@ -148,6 +176,8 @@ def program_type_from_irregular_field(df):
     - If Derived Academic Status is Never_Enrolled -> Unknown
     - Else if Irregular Program field is blank -> Regular
     - Else use the Irregular Program value (e.g., Option III); ESL matches case-insensitively as "ESL"
+    - If Major or any Pseudo Sch cell indicates ESL / English as a Second Language, Program Type is ESL
+      (overrides Irregular Program and Regular), except Never_Enrolled stays Unknown.
     """
     status_col = next(
         (c for c in df.columns if c.strip().lower() == "derived academic status"),
@@ -170,10 +200,25 @@ def program_type_from_irregular_field(df):
         # If not blank, preserve category value from uploaded file (ESL normalized above).
         program = raw.fillna("Regular")
 
+    never_mask = pd.Series(False, index=df.index)
     if status_col:
         status = df[status_col].astype(str).str.strip().str.lower()
         never_mask = status.eq("never_enrolled")
         program.loc[never_mask] = "Unknown"
+
+    major_col = find_first_matching_column(df, ["Maj1 Name", "Major", "Major Name"])
+    major_esl = (
+        df[major_col].map(_text_indicates_esl_program)
+        if major_col
+        else pd.Series(False, index=df.index)
+    )
+    pseudo_cols = [c for c in df.columns if c.strip().lower().startswith("pseudo sch")]
+    school_esl = pd.Series(False, index=df.index)
+    for c in pseudo_cols:
+        school_esl = school_esl | df[c].map(_text_indicates_esl_program)
+
+    esl_from_major_or_school = major_esl | school_esl
+    program.loc[esl_from_major_or_school & ~never_mask] = "ESL"
 
     return normalize_unknown(program)
 
