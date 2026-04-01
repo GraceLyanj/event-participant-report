@@ -53,7 +53,7 @@ with tab_report:
 ### Step 3 - Generate report
 
 1. After you copy the EID list, use it in Advisor Toolkit to pull the latest data.
-2. In Advisor Toolkit, include at least these fields in your report: **Major**, **Pseudo School(s)**, **Gender**, **Citizenship** (US citizen, PR, or international), and **Irregular Program** (e.g., Option III).
+2. In Advisor Toolkit, include at least these fields in your report: **Pseudo School(s)**, **Gender**, **Citizenship** (US citizen, PR, or international), and **Irregular Program** (e.g., Option III).
 3. Generate the report and download it as a CSV.
 4. Upload the CSV file(s) you downloaded from Advisor Toolkit (you can select several files to merge into one report; order is preserved, then duplicate EIDs are collapsed to the first row). The app will generate a Word report with tables and charts, using a built-in enrollment reference file (All_International_Students_Enrolled.csv committed with this app) to add a comparison section (enrollment % vs participation % by school).
 
@@ -64,7 +64,6 @@ with tab_report:
   - `Derived Academic Status`
   - `Pseudo Sch1`
 - **Recommended (for more tables/charts):**
-  - `Maj1 Name`
   - `Gender`
   - `Citizenship`
   - `Irregular Program`

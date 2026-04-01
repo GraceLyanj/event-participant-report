@@ -294,6 +294,60 @@ def program_type_from_irregular_field(df):
     return normalize_unknown(program)
 
 
+def _map_derived_status_to_level_group(val):
+    """
+    Map Advisor Toolkit Derived Academic Status to three report buckets.
+    Undergrad is detected before graduate because 'undergraduate' contains 'graduate'.
+    """
+    if val is None:
+        return "Other"
+    try:
+        if pd.isna(val):
+            return "Other"
+    except (TypeError, ValueError):
+        pass
+    s = str(val).strip().lower()
+    if s in {"", "nan", "none", "n/a", "na", "--", "-"}:
+        return "Other"
+    s_compact = s.replace(" ", "_")
+    if "never_enrolled" in s_compact or s_compact == "neverenrolled":
+        return "Other"
+    if "undergrad" in s or "bachelor" in s or "baccalaureate" in s:
+        return "Undergraduate"
+    if (
+        "graduate" in s
+        or re.search(r"(?<![a-z])grad(?![a-z])", s)
+        or "master" in s
+        or "doctoral" in s
+        or "doctorate" in s
+        or "ph.d" in s
+        or "phd" in s
+    ):
+        return "Graduate"
+    return "Other"
+
+
+def academic_level_group_series(df):
+    """
+    Return a Series of 'Undergraduate' | 'Graduate' | 'Other' aligned to df.index,
+    or None if Derived Academic Status is not present.
+    """
+    status_col = next(
+        (c for c in df.columns if c.strip().lower() == "derived academic status"),
+        None,
+    )
+    if not status_col:
+        return None
+    return df[status_col].map(_map_derived_status_to_level_group)
+
+
+def ordered_level_counts(level_series, level_order=("Undergraduate", "Graduate", "Other")):
+    """value_counts restricted to level_order; drops categories with zero count."""
+    counts = level_series.value_counts()
+    ordered = pd.Series({k: int(counts.get(k, 0)) for k in level_order})
+    return ordered[ordered > 0]
+
+
 # Embedded school lookup: script looks for this file in script dir, CSV dir, or Downloads
 SCHOOL_LOOKUP_FILENAME = "COLA Toolkit, Spring 2026.csv"
 # Enrollment reference for representation comparison (optional)
@@ -846,9 +900,6 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
     )
     # Build list of categories from the uploaded participant CSV only.
     categories = []
-    major_col = find_first_matching_column(df, ["Maj1 Name", "Major", "Major Name"])
-    if major_col:
-        categories.append((normalize_unknown(df[major_col]), "Proportion of Majors"))
 
     # Explicit demographic charts requested: Gender and Citizenship
     gender_col = find_first_matching_column(df, ["Gender"])
@@ -915,6 +966,17 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
             pie_chart_to_bytes(counts, chart_title),
             width=Inches(5.5),
         )
+
+    level_series = academic_level_group_series(df)
+    if level_series is not None:
+        level_counts = ordered_level_counts(level_series)
+        if not level_counts.empty:
+            chart_title = f"Graduate / Undergraduate / Other (N = {n_unique_eids})"
+            doc.add_heading(chart_title, level=2)
+            doc.add_picture(
+                pie_chart_to_bytes(level_counts, chart_title),
+                width=Inches(5.5),
+            )
 
     # Comparison to international enrollment (if reference file provided or found)
     enrollment_path = resolve_enrollment_path(csv_dir, script_dir, enrollment_reference_path)
