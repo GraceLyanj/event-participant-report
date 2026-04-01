@@ -294,6 +294,32 @@ def program_type_from_irregular_field(df):
     return normalize_unknown(program)
 
 
+# Common Toolkit misspellings → single label (spacing/hyphens ignored for matching).
+_POSTDOC_FELLOW_COMPACT_FORMS = frozenset({
+    "postdoctoralfellow",
+    "postdocoralfellow",  # Postdocoral
+    "posdoctoralfellow",  # Posdoctoral
+})
+
+
+def canonicalize_derived_academic_status(val):
+    """Map Postdoctoral Fellow typos to 'Postdoctoral Fellow'; leave other values unchanged."""
+    if val is None:
+        return val
+    try:
+        if pd.isna(val):
+            return val
+    except (TypeError, ValueError):
+        return val
+    s = str(val).strip()
+    if not s or s.lower() == "nan":
+        return val
+    compact = re.sub(r"[\s\-_]+", "", s.lower())
+    if compact in _POSTDOC_FELLOW_COMPACT_FORMS:
+        return "Postdoctoral Fellow"
+    return val
+
+
 def _map_derived_status_to_level_group(val):
     """
     Map Advisor Toolkit Derived Academic Status to three report buckets.
@@ -863,6 +889,14 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
     if len(df) == 0:
         raise ValueError("No rows remaining after cleaning; cannot generate report.")
     n_unique_eids = len(df)
+
+    status_col_norm = next(
+        (c for c in df.columns if c.strip().lower() == "derived academic status"),
+        None,
+    )
+    if status_col_norm:
+        df = df.copy()
+        df[status_col_norm] = df[status_col_norm].map(canonicalize_derived_academic_status)
 
     # Parse "never enrolled" EIDs from optional notes
     never_enrolled_eids = _parse_never_enrolled_eids(never_enrolled_notes)
