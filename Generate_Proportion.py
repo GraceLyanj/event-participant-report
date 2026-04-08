@@ -119,6 +119,45 @@ def dedupe_participants_by_eid(df):
     return out.reset_index(drop=True)
 
 
+def repeated_participants_table(df):
+    """
+    Build repeated-participant rows from combined input files before deduplication.
+    Returns columns: EID, Name, Repeat Count.
+    """
+    eid_col = find_eid_column(df)
+    if not eid_col:
+        return pd.DataFrame(columns=["EID", "Name", "Repeat Count"])
+
+    name_col = find_first_matching_column(df, ["Name", "Student Name", "Full Name"])
+    work = df.copy()
+    work["_eid_raw"] = work[eid_col].astype(str).str.strip()
+    work = work[work["_eid_raw"] != ""]
+    work = work[work["_eid_raw"].str.lower() != "nan"]
+    if work.empty:
+        return pd.DataFrame(columns=["EID", "Name", "Repeat Count"])
+
+    work["_eid_key"] = work["_eid_raw"].str.lower()
+    counts = work["_eid_key"].value_counts()
+    repeated_keys = counts[counts > 1]
+    if repeated_keys.empty:
+        return pd.DataFrame(columns=["EID", "Name", "Repeat Count"])
+
+    first_by_key = work.drop_duplicates(subset=["_eid_key"], keep="first").set_index("_eid_key")
+    rows = []
+    for key, cnt in repeated_keys.items():
+        eid_value = first_by_key.at[key, "_eid_raw"] if key in first_by_key.index else key
+        if name_col and key in first_by_key.index:
+            name_value = str(first_by_key.at[key, name_col]).strip()
+            if name_value.lower() == "nan":
+                name_value = ""
+        else:
+            name_value = ""
+        rows.append({"EID": eid_value, "Name": name_value, "Repeat Count": int(cnt)})
+
+    out = pd.DataFrame(rows).sort_values(["Repeat Count", "EID"], ascending=[False, True]).reset_index(drop=True)
+    return out
+
+
 def normalize_citizenship(series):
     """Keep uploaded citizenship labels as-is; only normalize missing to Unknown."""
     if series is None:
@@ -885,6 +924,7 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
 
     # Clean before any analysis
     df = clean_unknown_students(df)
+    repeated_df = repeated_participants_table(df)
     df = dedupe_participants_by_eid(df)
     if len(df) == 0:
         raise ValueError("No rows remaining after cleaning; cannot generate report.")
@@ -932,6 +972,24 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
         "For Program Type, rows with Derived Academic Status Never_Enrolled are Unknown only when they have no ESL "
         "signal (major/school/Irregular Program) and no other Irregular Program label; ESL is prioritized over Unknown."
     )
+
+    # Data checks from the full event-series input (all uploaded files combined).
+    doc.add_heading("Data checks", level=1)
+    if repeated_df.empty:
+        doc.add_paragraph(
+            "No repeated participants were found across the combined event-series input files."
+        )
+    else:
+        doc.add_paragraph(
+            "Repeated participants across the combined event-series input "
+            "(counts are before EID deduplication)."
+        )
+        add_table_to_doc(
+            doc,
+            f"Repeated participants (N repeated EIDs = {len(repeated_df)})",
+            repeated_df,
+        )
+
     # Build list of categories from the uploaded participant CSV only.
     categories = []
 
