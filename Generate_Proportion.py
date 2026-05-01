@@ -362,7 +362,9 @@ def canonicalize_derived_academic_status(val):
 def _map_derived_status_to_level_group(val):
     """
     Map Advisor Toolkit Derived Academic Status to three report buckets.
-    Undergrad is detected before graduate because 'undergraduate' contains 'graduate'.
+
+    Explicit Toolkit values (order matters: UT bachelor-grad must not hit generic
+    'bachelor' → undergrad; 'undergraduate' still wins over bare 'graduate' substring).
     """
     if val is None:
         return "Other"
@@ -374,13 +376,22 @@ def _map_derived_status_to_level_group(val):
     s = str(val).strip().lower()
     if s in {"", "nan", "none", "n/a", "na", "--", "-"}:
         return "Other"
-    s_compact = s.replace(" ", "_")
-    if "never_enrolled" in s_compact or s_compact == "neverenrolled":
+    s_underscore = s.replace(" ", "_")
+    compact = re.sub(r"[\s\-_]+", "", s)
+
+    if "never_enrolled" in s_underscore or compact == "neverenrolled":
         return "Other"
-    if "undergrad" in s or "bachelor" in s or "baccalaureate" in s:
-        return "Undergraduate"
-    if (
-        "graduate" in s
+
+    # UT bachelor's alumni in graduate study (not generic undergrad "bachelor")
+    if "utbachelorgrad" in compact or "utbachlorgrad" in compact:
+        return "Graduate"
+
+    # Grad student / other graduate-level statuses (exclude 'undergraduate' substring)
+    if "undergrad" not in s and (
+        "grad_student" in s_underscore
+        or "gradstudent" in compact
+        or "graduatestudent" in compact
+        or ("graduate" in s and "undergraduate" not in s)
         or re.search(r"(?<![a-z])grad(?![a-z])", s)
         or "master" in s
         or "doctoral" in s
@@ -389,6 +400,19 @@ def _map_derived_status_to_level_group(val):
         or "phd" in s
     ):
         return "Graduate"
+
+    # Good enrollment standing → undergraduate (e.g. Currently_Enrolled_Good, Enrl_Good)
+    if (
+        "enrlgood" in compact
+        or "enrl_good" in s_underscore
+        or "enrolledgood" in compact
+        or ("enrl" in s and "good" in s)
+        or ("currently" in s and "good" in s and "enrol" in s)
+    ):
+        return "Undergraduate"
+
+    if "undergrad" in s or "bachelor" in s or "baccalaureate" in s:
+        return "Undergraduate"
     return "Other"
 
 
