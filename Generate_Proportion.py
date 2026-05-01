@@ -359,19 +359,23 @@ def canonicalize_derived_academic_status(val):
     return val
 
 
+# Derived Academic Status (Toolkit column only): compact key → report bucket
+_LEVEL_GROUP_BY_COMPACT_STATUS = {
+    "neverenrolled": "Other",
+    "enrlgood": "Undergraduate",
+    "gradstud": "Graduate",
+    "utbachelorgrad": "Graduate",
+    # Historic export typo still seen in some files
+    "utbachlorgrad": "Graduate",
+}
+
+
 def _map_derived_status_to_level_group(val):
     """
-    Map Advisor Toolkit Derived Academic Status to three report buckets.
+    Map Derived Academic Status to Undergraduate / Graduate / Other.
 
-    Toolkit-oriented:
-    - Blank / missing → Other
-    - Never enrolled → Other
-    - Enrl/Good (and similar good-standing enrollment labels) → Undergraduate
-    - Grad Stud / Grad Student → Graduate
-    - UT bachelor→grad transition codes → Graduate
-    - Any other non-empty value → Other
-
-    Slashes (e.g. Enrl/Good) are stripped when forming compact tokens.
+    Only the Toolkit labels used in this export are recognized (spacing, slash,
+    case, and NBSP-insensitive); anything else is Other.
     """
     if val is None:
         return "Other"
@@ -380,39 +384,15 @@ def _map_derived_status_to_level_group(val):
             return "Other"
     except (TypeError, ValueError):
         pass
-    s = str(val).strip().lower()
+    s = str(val).strip().lower().lstrip("\ufeff")
+    s = unicodedata.normalize("NFKC", s)
+    s = s.replace("\xa0", " ").strip()
     for ch in ("\u2013", "\u2014", "\u2212"):
         s = s.replace(ch, "-")
     if s in {"", "nan", "none", "n/a", "na", "--", "-"}:
         return "Other"
-    s_underscore = re.sub(r"\s+", "_", s)
-    # Spaces, hyphens, underscores, slashes → compact (Enrl/Good → enrlgood)
     compact = re.sub(r"[\s\-_/]+", "", s)
-
-    if "never_enrolled" in s_underscore or compact == "neverenrolled":
-        return "Other"
-
-    # Grad Stud / Grad Student (abbreviated or full; avoid matching e.g. Grad Studies)
-    if compact in ("gradstud", "gradstudent", "graduatestudent") or s_underscore in (
-        "grad_stud",
-        "grad_student",
-    ):
-        return "Graduate"
-
-    # UT bachelor's alumni in graduate study (toolkit typo bachlor)
-    if "utbachelorgrad" in compact or "utbachlorgrad" in compact:
-        return "Graduate"
-
-    # Enrl/Good and longer 'currently enrolled … good' toolkit strings
-    if (
-        compact == "enrlgood"
-        or "enrl_good" in s_underscore
-        or "enrolledgood" in compact
-        or ("currently" in compact and "good" in compact and "enrol" in compact)
-    ):
-        return "Undergraduate"
-
-    return "Other"
+    return _LEVEL_GROUP_BY_COMPACT_STATUS.get(compact, "Other")
 
 
 def academic_level_group_series(df):
