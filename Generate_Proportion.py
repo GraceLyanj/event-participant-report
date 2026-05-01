@@ -158,11 +158,41 @@ def repeated_participants_table(df):
     return out
 
 
+_NON_US_CITIZEN_LABEL = "Non - U.S. Citizen"
+_NON_US_ABBREV_RE = re.compile(
+    r"^non\s*[-–—/]?\s*u\.?\s*s\.?\.?\s*(citizen)?\s*$",
+    re.IGNORECASE,
+)
+
+
 def normalize_citizenship(series):
-    """Keep uploaded citizenship labels as-is; only normalize missing to Unknown."""
+    """
+    Normalize missing to Unknown; merge abbreviated Non-U.S. labels into a single
+    Non - U.S. Citizen category (e.g. exports split 'Non - U.S.' vs 'Non - U.S. Citizen').
+    """
     if series is None:
         return series
-    return normalize_unknown(series)
+    s = normalize_unknown(series)
+
+    def relabel(val):
+        if val is None:
+            return val
+        try:
+            if pd.isna(val):
+                return val
+        except (TypeError, ValueError):
+            pass
+        t = str(val).strip()
+        if t == "Unknown":
+            return t
+        compact = re.sub(r"[\s\-_.]+", "", t.lower())
+        if compact in ("nonus", "nonuscitizen"):
+            return _NON_US_CITIZEN_LABEL
+        if _NON_US_ABBREV_RE.match(t):
+            return _NON_US_CITIZEN_LABEL
+        return val
+
+    return s.map(relabel)
 
 
 def normalize_unknown(series):
@@ -996,8 +1026,9 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
         f"This report is based on N = {n_unique_eids} unique EID(s) from the event participant {file_phrase} (not on enrollment "
         "status). Duplicate rows for the same EID are dropped; the kept row is the first across the combined data. "
         "Rows with missing names are excluded before deduplication. Missing demographic values are shown as Unknown. "
-        "For Program Type, rows with Derived Academic Status Never_Enrolled are Unknown only when they have no ESL "
-        "signal (major/school/Irregular Program) and no other Irregular Program label; ESL is prioritized over Unknown."
+        "For Program Type (shown as Degree-Seeking vs ESL, Unknown, Irregular in tables/charts), rows with Derived Academic Status "
+        "Never_Enrolled are Unknown only when they have no ESL signal (major/school/Irregular Program) and no other Irregular Program "
+        "label; ESL is prioritized over Unknown."
     )
 
     # Data checks from the full event-series input (all uploaded files combined).
@@ -1047,7 +1078,15 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
         )
     else:
         program_series = df["Program Type"]
-    categories.append((normalize_unknown(program_series), "Proportion of Regular vs Irregular Programs"))
+    program_for_report = normalize_unknown(program_series).replace({"Regular": "Degree-Seeking"})
+    categories.append(
+        (
+            program_for_report,
+            "Proportion of Program Type (Degree-Seeking vs ESL, Unknown, Irregular)",
+        )
+    )
+
+    level_series = academic_level_group_series(df)
 
     # Add formatted tables (one per category), with explicit sample sizes
     doc.add_heading('Summary tables', level=1)
@@ -1064,6 +1103,26 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
         titled = f"{title} (N = {valid_n})"
         counts, proportions, tbl = get_proportions_df(series)
         add_table_to_doc(doc, titled, tbl)
+
+    if level_series is not None:
+        level_counts = ordered_level_counts(level_series)
+        if not level_counts.empty:
+            total_lv = int(level_counts.sum())
+            tbl_lv = pd.DataFrame(
+                {
+                    "Category": level_counts.index.astype(str),
+                    "Count": level_counts.values,
+                    "Proportion": (level_counts.values / total_lv).astype(float),
+                }
+            )
+            add_table_to_doc(
+                doc,
+                (
+                    "Graduate / Undergraduate / Other — AcademicStatus, latest semester "
+                    f"(N = {total_lv})"
+                ),
+                tbl_lv,
+            )
 
     # Add pie chart for each category (labels in legend to avoid overlapping), with sample sizes
     doc.add_heading('Charts', level=1)
@@ -1086,7 +1145,6 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
             width=Inches(5.5),
         )
 
-    level_series = academic_level_group_series(df)
     if level_series is not None:
         level_counts = ordered_level_counts(level_series)
         if not level_counts.empty:
