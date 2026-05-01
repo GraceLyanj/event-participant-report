@@ -1145,10 +1145,7 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
     if level_series is not None:
         level_counts = ordered_level_counts(level_series)
         if not level_counts.empty:
-            chart_title = (
-                f"Graduate / Undergraduate / Other — AcademicStatus, latest semester "
-                f"(N = {n_unique_eids})"
-            )
+            chart_title = f"Academic Status (N = {n_unique_eids})"
             doc.add_heading(chart_title, level=2)
             doc.add_picture(
                 pie_chart_to_bytes(level_counts, chart_title),
