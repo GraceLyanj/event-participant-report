@@ -359,7 +359,7 @@ def canonicalize_derived_academic_status(val):
     return val
 
 
-# Derived Academic Status (Toolkit column only): compact key → report bucket
+# AcademicStatus (latest semester column): compact key → report bucket
 _LEVEL_GROUP_BY_COMPACT_STATUS = {
     "neverenrolled": "Other",
     "enrlgood": "Undergraduate",
@@ -369,10 +369,37 @@ _LEVEL_GROUP_BY_COMPACT_STATUS = {
     "utbachlorgrad": "Graduate",
 }
 
+_ACADEMIC_STATUS_LATEST_SEM_COL_LOWER = (
+    "academicstatus (assumed as of student's latest semester)"
+)
 
-def _map_derived_status_to_level_group(val):
+
+def _normalize_header_for_match(name):
+    """Strip, lower, and unify apostrophes for column-name comparison."""
+    n = str(name).strip().lower()
+    return n.replace("\u2019", "'").replace("`", "'")
+
+
+def find_academic_status_latest_semester_column(df):
     """
-    Map Derived Academic Status to Undergraduate / Graduate / Other.
+    Column used for the Graduate / Undergraduate / Other chart:
+    AcademicStatus (assumed as of Student's Latest Semester).
+    """
+    if df is None or len(df.columns) == 0:
+        return None
+    for c in df.columns:
+        if _normalize_header_for_match(c) == _ACADEMIC_STATUS_LATEST_SEM_COL_LOWER:
+            return c
+    for c in df.columns:
+        k = _normalize_header_for_match(c)
+        if k.startswith("academicstatus") and "latest" in k and "semester" in k:
+            return c
+    return None
+
+
+def _map_academic_status_to_level_group(val):
+    """
+    Map AcademicStatus (latest semester) to Undergraduate / Graduate / Other.
 
     Only the Toolkit labels used in this export are recognized (spacing, slash,
     case, and NBSP-insensitive); anything else is Other.
@@ -398,15 +425,12 @@ def _map_derived_status_to_level_group(val):
 def academic_level_group_series(df):
     """
     Return a Series of 'Undergraduate' | 'Graduate' | 'Other' aligned to df.index,
-    or None if Derived Academic Status is not present.
+    or None if AcademicStatus (latest semester) is not present.
     """
-    status_col = next(
-        (c for c in df.columns if c.strip().lower() == "derived academic status"),
-        None,
-    )
+    status_col = find_academic_status_latest_semester_column(df)
     if not status_col:
         return None
-    return df[status_col].map(_map_derived_status_to_level_group)
+    return df[status_col].map(_map_academic_status_to_level_group)
 
 
 def ordered_level_counts(level_series, level_order=("Undergraduate", "Graduate", "Other")):
@@ -1066,7 +1090,10 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
     if level_series is not None:
         level_counts = ordered_level_counts(level_series)
         if not level_counts.empty:
-            chart_title = f"Graduate / Undergraduate / Other (N = {n_unique_eids})"
+            chart_title = (
+                f"Graduate / Undergraduate / Other — AcademicStatus, latest semester "
+                f"(N = {n_unique_eids})"
+            )
             doc.add_heading(chart_title, level=2)
             doc.add_picture(
                 pie_chart_to_bytes(level_counts, chart_title),

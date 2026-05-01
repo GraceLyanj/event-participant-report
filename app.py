@@ -62,6 +62,7 @@ with tab_report:
 - **Required for cleaning and proportions:**
   - `Name`
   - `Derived Academic Status`
+  - `AcademicStatus (assumed as of Student's Latest Semester)` (Graduate / Undergraduate / Other chart)
   - `Pseudo Sch1`
 - **Recommended (for more tables/charts):**
   - `Gender`
