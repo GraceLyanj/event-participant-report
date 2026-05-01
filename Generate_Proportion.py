@@ -1082,7 +1082,7 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
     categories.append(
         (
             program_for_report,
-            "Proportion of Program Type (Degree-Seeking vs ESL, Unknown, Irregular)",
+            "Proportion of Program Type",
         )
     )
 
@@ -1117,10 +1117,7 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
             )
             add_table_to_doc(
                 doc,
-                (
-                    "Graduate / Undergraduate / Other — AcademicStatus, latest semester "
-                    f"(N = {total_lv})"
-                ),
+                f"Academic Status (N = {total_lv})",
                 tbl_lv,
             )
 
