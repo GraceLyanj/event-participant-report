@@ -363,8 +363,15 @@ def _map_derived_status_to_level_group(val):
     """
     Map Advisor Toolkit Derived Academic Status to three report buckets.
 
-    Explicit Toolkit values (order matters: UT bachelor-grad must not hit generic
-    'bachelor' → undergrad; 'undergraduate' still wins over bare 'graduate' substring).
+    Toolkit-oriented:
+    - Blank / missing → Other
+    - Never enrolled → Other
+    - Enrl/Good (and similar good-standing enrollment labels) → Undergraduate
+    - Grad Stud / Grad Student → Graduate
+    - UT bachelor→grad transition codes → Graduate
+    - Any other non-empty value → Other
+
+    Slashes (e.g. Enrl/Good) are stripped when forming compact tokens.
     """
     if val is None:
         return "Other"
@@ -374,45 +381,37 @@ def _map_derived_status_to_level_group(val):
     except (TypeError, ValueError):
         pass
     s = str(val).strip().lower()
+    for ch in ("\u2013", "\u2014", "\u2212"):
+        s = s.replace(ch, "-")
     if s in {"", "nan", "none", "n/a", "na", "--", "-"}:
         return "Other"
-    s_underscore = s.replace(" ", "_")
-    compact = re.sub(r"[\s\-_]+", "", s)
+    s_underscore = re.sub(r"\s+", "_", s)
+    # Spaces, hyphens, underscores, slashes → compact (Enrl/Good → enrlgood)
+    compact = re.sub(r"[\s\-_/]+", "", s)
 
     if "never_enrolled" in s_underscore or compact == "neverenrolled":
         return "Other"
 
-    # UT bachelor's alumni in graduate study (not generic undergrad "bachelor")
+    # Grad Stud / Grad Student (abbreviated or full; avoid matching e.g. Grad Studies)
+    if compact in ("gradstud", "gradstudent", "graduatestudent") or s_underscore in (
+        "grad_stud",
+        "grad_student",
+    ):
+        return "Graduate"
+
+    # UT bachelor's alumni in graduate study (toolkit typo bachlor)
     if "utbachelorgrad" in compact or "utbachlorgrad" in compact:
         return "Graduate"
 
-    # Grad student / other graduate-level statuses (exclude 'undergraduate' substring)
-    if "undergrad" not in s and (
-        "grad_student" in s_underscore
-        or "gradstudent" in compact
-        or "graduatestudent" in compact
-        or ("graduate" in s and "undergraduate" not in s)
-        or re.search(r"(?<![a-z])grad(?![a-z])", s)
-        or "master" in s
-        or "doctoral" in s
-        or "doctorate" in s
-        or "ph.d" in s
-        or "phd" in s
-    ):
-        return "Graduate"
-
-    # Good enrollment standing → undergraduate (e.g. Currently_Enrolled_Good, Enrl_Good)
+    # Enrl/Good and longer 'currently enrolled … good' toolkit strings
     if (
-        "enrlgood" in compact
+        compact == "enrlgood"
         or "enrl_good" in s_underscore
         or "enrolledgood" in compact
-        or ("enrl" in s and "good" in s)
-        or ("currently" in s and "good" in s and "enrol" in s)
+        or ("currently" in compact and "good" in compact and "enrol" in compact)
     ):
         return "Undergraduate"
 
-    if "undergrad" in s or "bachelor" in s or "baccalaureate" in s:
-        return "Undergraduate"
     return "Other"
 
 
