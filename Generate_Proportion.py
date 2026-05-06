@@ -429,14 +429,33 @@ def _compact_for_scholar_label_match(val):
 
 def _status_represents_scholar(val):
     """True for Visiting Scholar and Postdoctoral Fellow (Toolkit spellings and typos), and canonical 'Scholar'."""
-    compact = _compact_for_scholar_label_match(val)
-    if not compact:
+    if val is None:
         return False
+    try:
+        if pd.isna(val):
+            return False
+    except (TypeError, ValueError):
+        pass
+    raw = unicodedata.normalize("NFKC", str(val).strip())
+    if not raw or raw.lower() == "nan":
+        return False
+    compact = _compact_for_scholar_label_match(raw)
     if compact == "scholar":
         return True
     if compact in _POSTDOC_FELLOW_COMPACT_FORMS:
         return True
-    return "visitingscholar" in compact
+    if "visitingscholar" in compact:
+        return True
+    # Toolkit sometimes uses punctuation/slashes compact matcher strips incompletely; phrase match as fallback.
+    snorm = re.sub(r"\s+", " ", raw.lower()).strip()
+    if re.search(r"\bvisiting\s+scholar\b", snorm):
+        return True
+    if re.search(
+        r"\bpostdoctoral\b(?:\s+fellow)?\b|\bpost[- ]?doctoral\s+fellow\b|\bpost[- ]?doc\s+fellow\b|\bpostdocs?\b",
+        snorm,
+    ):
+        return True
+    return False
 
 
 def canonicalize_derived_academic_status(val):
@@ -585,6 +604,9 @@ def academic_level_group_series(df):
     Return a Series of 'Undergraduate' | 'Graduate' | 'Scholar' | 'Other' aligned to df.index,
     or None if AcademicStatus (latest semester) is not present.
 
+    Derived Academic Status wins for Scholar (Visiting Scholar / Postdoctoral Fellow): latest-semester
+    often stays Enrl Good / Grad Stud while Derived carries the participant type.
+
     When Irregular Program is Option III and AcademicStatus maps to Other, level is inferred
     from Career-like columns first, then Derived Academic Status (Advisor Toolkit fields
     that appear before Irregular Program in typical exports).
@@ -594,6 +616,23 @@ def academic_level_group_series(df):
         return None
     out = df[status_col].map(_map_academic_status_to_level_group)
 
+    das_col = next(
+        (c for c in df.columns if c.strip().lower() == "derived academic status"),
+        None,
+    )
+    career_col = find_first_matching_column(
+        df,
+        ["Career", "Academic Career", "Student Career", "Career Description"],
+    )
+
+    scholar_mask = pd.Series(False, index=df.index)
+    if das_col:
+        scholar_mask = scholar_mask | df[das_col].map(_status_represents_scholar)
+    if career_col:
+        scholar_mask = scholar_mask | df[career_col].map(_status_represents_scholar)
+    if scholar_mask.any():
+        out = out.mask(scholar_mask, "Scholar")
+
     irregular_col = next(
         (c for c in df.columns if c.strip().lower() == "irregular program"),
         None,
@@ -602,14 +641,6 @@ def academic_level_group_series(df):
         opt3 = df[irregular_col].map(_is_option_iii_irregular_label)
         fc = opt3 & out.eq("Other")
         if fc.any():
-            career_col = find_first_matching_column(
-                df,
-                ["Career", "Academic Career", "Student Career", "Career Description"],
-            )
-            das_col = next(
-                (c for c in df.columns if c.strip().lower() == "derived academic status"),
-                None,
-            )
             sub = out.loc[fc].copy()
             if career_col:
                 inf_c = df.loc[fc, career_col].map(_infer_level_from_career_like)
