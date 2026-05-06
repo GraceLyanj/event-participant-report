@@ -404,16 +404,8 @@ def program_type_from_irregular_field(df):
     return normalize_unknown(program)
 
 
-# Common Toolkit misspellings → Scholar (spacing/parens ignored for matching).
-_POSTDOC_FELLOW_COMPACT_FORMS = frozenset({
-    "postdoctoralfellow",
-    "postdocoralfellow",  # Postdocoral
-    "posdoctoralfellow",  # Posdoctoral
-})
-
-
-def _compact_for_scholar_label_match(val):
-    """Normalize status text for Visiting Scholar / Postdoctoral Fellow detection."""
+def _compact_for_irregular_scholar_match(val):
+    """Normalize Irregular Program text for scholar detection."""
     if val is None:
         return ""
     try:
@@ -427,8 +419,11 @@ def _compact_for_scholar_label_match(val):
     return re.sub(r"[\s\-_/()]+", "", s)
 
 
-def _status_represents_scholar(val):
-    """True for Visiting Scholar and Postdoctoral Fellow (Toolkit spellings and typos), and canonical 'Scholar'."""
+def _irregular_program_indicates_scholar(val):
+    """
+    True when Irregular Program maps to Academic Status bucket Scholar:
+    scholar, visiting scholar, or postdoctoral fellow (word/phrase match on Irregular Program).
+    """
     if val is None:
         return False
     try:
@@ -439,16 +434,15 @@ def _status_represents_scholar(val):
     raw = unicodedata.normalize("NFKC", str(val).strip())
     if not raw or raw.lower() == "nan":
         return False
-    compact = _compact_for_scholar_label_match(raw)
+    compact = _compact_for_irregular_scholar_match(raw)
     if compact == "scholar":
-        return True
-    if compact in _POSTDOC_FELLOW_COMPACT_FORMS:
         return True
     if "visitingscholar" in compact:
         return True
-    # Toolkit sometimes uses punctuation/slashes compact matcher strips incompletely; phrase match as fallback.
     snorm = re.sub(r"\s+", " ", raw.lower()).strip()
     if re.search(r"\bvisiting\s+scholar\b", snorm):
+        return True
+    if re.search(r"\bscholar\b", snorm):
         return True
     if re.search(
         r"\bpostdoctoral\b(?:\s+fellow)?\b|\bpost[- ]?doctoral\s+fellow\b|\bpost[- ]?doc\s+fellow\b|\bpostdocs?\b",
@@ -456,23 +450,6 @@ def _status_represents_scholar(val):
     ):
         return True
     return False
-
-
-def canonicalize_derived_academic_status(val):
-    """Map Visiting Scholar and Postdoctoral Fellow (incl. typos) to 'Scholar'; leave other values unchanged."""
-    if val is None:
-        return val
-    try:
-        if pd.isna(val):
-            return val
-    except (TypeError, ValueError):
-        return val
-    s = str(val).strip()
-    if not s or s.lower() == "nan":
-        return val
-    if _status_represents_scholar(s):
-        return "Scholar"
-    return val
 
 
 # AcademicStatus (latest semester column): compact key → report bucket
@@ -515,11 +492,10 @@ def find_academic_status_latest_semester_column(df):
 
 def _map_academic_status_to_level_group(val):
     """
-    Map AcademicStatus (latest semester) to Undergraduate / Graduate / Scholar / Other.
+    Map AcademicStatus (latest semester) to Undergraduate / Graduate / Other.
 
-    Only the Toolkit labels used in this export are recognized (spacing, slash,
-    case, and NBSP-insensitive); Visiting Scholar and Postdoctoral Fellow map to Scholar.
-    Anything else unrecognized is Other.
+    Scholar is applied only from Irregular Program (see academic_level_group_series).
+    Only Toolkit labels in _LEVEL_GROUP_BY_COMPACT_STATUS are recognized; else Other.
     """
     if val is None:
         return "Other"
@@ -536,15 +512,12 @@ def _map_academic_status_to_level_group(val):
     if s in {"", "nan", "none", "n/a", "na", "--", "-"}:
         return "Other"
     compact = re.sub(r"[\s\-_/()]+", "", s)
-    if _status_represents_scholar(s):
-        return "Scholar"
     return _LEVEL_GROUP_BY_COMPACT_STATUS.get(compact, "Other")
 
 
 def _infer_level_from_career_like(val):
     """
-    Map free-text career fields to Undergraduate / Graduate / Scholar when obvious.
-    Scholar is checked before Graduate so Postdoctoral Fellow is not classified as Graduate.
+    Map free-text career fields to Undergraduate / Graduate when obvious.
     Returns pd.NA when unknown.
     """
     if val is None:
@@ -558,8 +531,6 @@ def _infer_level_from_career_like(val):
     s = s.replace("\xa0", " ").strip().lower()
     if s in {"", "nan", "none", "n/a", "na", "--", "-"}:
         return pd.NA
-    if _status_represents_scholar(s):
-        return "Scholar"
     if re.search(r"\bundergraduate\b|\bundergrad\b|\bugrd\b", s):
         return "Undergraduate"
     if re.search(
@@ -572,7 +543,7 @@ def _infer_level_from_career_like(val):
 
 def _map_derived_status_to_undergrad_grad(val):
     """
-    Map Derived Academic Status to Undergraduate / Graduate / Scholar when unambiguous.
+    Map Derived Academic Status to Undergraduate / Graduate when unambiguous.
     Returns pd.NA when not an enrollment-level signal (e.g. Never_Enrolled).
     """
     if val is None:
@@ -589,8 +560,6 @@ def _map_derived_status_to_undergrad_grad(val):
         s = s.replace(ch, "-")
     if s in {"", "nan", "none", "n/a", "na", "--", "-"}:
         return pd.NA
-    if _status_represents_scholar(s):
-        return "Scholar"
     compact = re.sub(r"[\s\-_/]+", "", s)
     if compact == "enrlgood":
         return "Undergraduate"
@@ -604,8 +573,8 @@ def academic_level_group_series(df):
     Return a Series of 'Undergraduate' | 'Graduate' | 'Scholar' | 'Other' aligned to df.index,
     or None if AcademicStatus (latest semester) is not present.
 
-    Derived Academic Status wins for Scholar (Visiting Scholar / Postdoctoral Fellow): latest-semester
-    often stays Enrl Good / Grad Stud while Derived carries the participant type.
+    Scholar is assigned only when Irregular Program indicates scholar, visiting scholar,
+    or postdoctoral fellow (see _irregular_program_indicates_scholar).
 
     When Irregular Program is Option III and AcademicStatus maps to Other, level is inferred
     from Career-like columns first, then Derived Academic Status (Advisor Toolkit fields
@@ -616,31 +585,26 @@ def academic_level_group_series(df):
         return None
     out = df[status_col].map(_map_academic_status_to_level_group)
 
-    das_col = next(
-        (c for c in df.columns if c.strip().lower() == "derived academic status"),
-        None,
-    )
-    career_col = find_first_matching_column(
-        df,
-        ["Career", "Academic Career", "Student Career", "Career Description"],
-    )
-
-    scholar_mask = pd.Series(False, index=df.index)
-    if das_col:
-        scholar_mask = scholar_mask | df[das_col].map(_status_represents_scholar)
-    if career_col:
-        scholar_mask = scholar_mask | df[career_col].map(_status_represents_scholar)
-    if scholar_mask.any():
-        out = out.mask(scholar_mask, "Scholar")
-
     irregular_col = next(
         (c for c in df.columns if c.strip().lower() == "irregular program"),
         None,
     )
     if irregular_col:
+        scholar_ip = df[irregular_col].map(_irregular_program_indicates_scholar)
+        if scholar_ip.any():
+            out = out.mask(scholar_ip, "Scholar")
+
         opt3 = df[irregular_col].map(_is_option_iii_irregular_label)
         fc = opt3 & out.eq("Other")
         if fc.any():
+            career_col = find_first_matching_column(
+                df,
+                ["Career", "Academic Career", "Student Career", "Career Description"],
+            )
+            das_col = next(
+                (c for c in df.columns if c.strip().lower() == "derived academic status"),
+                None,
+            )
             sub = out.loc[fc].copy()
             if career_col:
                 inf_c = df.loc[fc, career_col].map(_infer_level_from_career_like)
@@ -1208,14 +1172,6 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
         raise ValueError("No rows remaining after cleaning; cannot generate report.")
     n_unique_eids = len(df)
 
-    status_col_norm = next(
-        (c for c in df.columns if c.strip().lower() == "derived academic status"),
-        None,
-    )
-    if status_col_norm:
-        df = df.copy()
-        df[status_col_norm] = df[status_col_norm].map(canonicalize_derived_academic_status)
-
     # Parse "never enrolled" EIDs from optional notes
     never_enrolled_eids = _parse_never_enrolled_eids(never_enrolled_notes)
 
@@ -1249,8 +1205,9 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
         "Rows with missing names are excluded before deduplication. Missing demographic values are shown as Unknown. "
         "For Program Type (shown as Degree-Seeking vs ESL, Unknown, Irregular in tables/charts), rows with Derived Academic Status "
         "Never_Enrolled are Unknown only when they have no ESL signal (major/school/Irregular Program) and no other Irregular Program "
-        "label; ESL is prioritized over Unknown. Irregular Program Option III is ignored for Program Type (Degree-Seeking unless ESL); "
-        "for Academic Status Undergraduate vs Graduate, Option III rows that would otherwise be Other use Career or Derived Academic Status when available."
+        "label; ESL is prioritized over Unknown. Irregular Program Option III is ignored for Program Type (Degree-Seeking unless ESL). "
+        "For Academic Status, Scholar is assigned only when Irregular Program indicates scholar, visiting scholar, or postdoctoral fellow; "
+        "Option III rows that would otherwise be Other use Career or Derived Academic Status for Undergraduate vs Graduate."
     )
 
     # Data checks from the full event-series input (all uploaded files combined).
