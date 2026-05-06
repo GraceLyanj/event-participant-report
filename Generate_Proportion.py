@@ -328,10 +328,28 @@ def canonicalize_school_display_name(name):
     return s
 
 
+def _is_option_iii_irregular_label(val):
+    """True when Irregular Program is Option III (spacing/punctuation-insensitive); does not match ESL."""
+    if val is None:
+        return False
+    try:
+        if pd.isna(val):
+            return False
+    except (TypeError, ValueError):
+        pass
+    s = unicodedata.normalize("NFKC", str(val).strip())
+    s = s.replace("\xa0", " ").strip().lower()
+    if not s or s == "nan":
+        return False
+    compact = re.sub(r"[\s\-_:]+", "", s)
+    return compact in ("optioniii", "option3", "optiii")
+
+
 def program_type_from_irregular_field(df):
     """
     Program type rules for reporting:
     - Start from Irregular Program: blank -> Regular, else that value (short ESL spellings -> "ESL")
+    - Option III is ignored (treated like blank -> Regular/Degree-Seeking unless ESL overrides)
     - Never_Enrolled: ESL (any signal) wins over Unknown; else keep a non-blank Irregular Program value;
       if neither ESL nor other irregular label (still Regular), use Unknown
     - ESL if Irregular Program, Major, or any Pseudo Sch cell indicates ESL / English as a Second Language
@@ -353,6 +371,7 @@ def program_type_from_irregular_field(df):
     if irregular_col:
         raw = df[irregular_col].astype(str).str.strip()
         raw = raw.replace({"": pd.NA, "nan": pd.NA, "None": pd.NA, "none": pd.NA})
+        raw = raw.mask(raw.map(_is_option_iii_irregular_label), pd.NA)
         irregular_esl_signal = df[irregular_col].map(_text_indicates_esl_program)
         esl_keys = raw.map(lambda x: _normalized_esl_key(x) if pd.notna(x) else pd.NA)
         esl_mask = raw.notna() & esl_keys.eq("esl")
@@ -474,15 +493,99 @@ def _map_academic_status_to_level_group(val):
     return _LEVEL_GROUP_BY_COMPACT_STATUS.get(compact, "Other")
 
 
+def _infer_level_from_career_like(val):
+    """
+    Map free-text career fields to Undergraduate / Graduate when obvious.
+    Returns pd.NA when unknown.
+    """
+    if val is None:
+        return pd.NA
+    try:
+        if pd.isna(val):
+            return pd.NA
+    except (TypeError, ValueError):
+        pass
+    s = unicodedata.normalize("NFKC", str(val).strip())
+    s = s.replace("\xa0", " ").strip().lower()
+    if s in {"", "nan", "none", "n/a", "na", "--", "-"}:
+        return pd.NA
+    if re.search(r"\bundergraduate\b|\bundergrad\b|\bugrd\b", s):
+        return "Undergraduate"
+    if re.search(
+        r"\bgraduate\b|\bgrad\s+stud|\bmasters?\b|\bdoctoral\b|\bph\.?\s*d\b|\bjd\b|\bmd\b",
+        s,
+    ):
+        return "Graduate"
+    return pd.NA
+
+
+def _map_derived_status_to_undergrad_grad(val):
+    """
+    Map Derived Academic Status compact token to Undergraduate / Graduate when unambiguous.
+    Returns pd.NA when not an enrollment level signal (e.g. Never_Enrolled).
+    """
+    if val is None:
+        return pd.NA
+    try:
+        if pd.isna(val):
+            return pd.NA
+    except (TypeError, ValueError):
+        pass
+    s = str(val).strip().lower().lstrip("\ufeff")
+    s = unicodedata.normalize("NFKC", s)
+    s = s.replace("\xa0", " ").strip()
+    for ch in ("\u2013", "\u2014", "\u2212"):
+        s = s.replace(ch, "-")
+    if s in {"", "nan", "none", "n/a", "na", "--", "-"}:
+        return pd.NA
+    compact = re.sub(r"[\s\-_/]+", "", s)
+    if compact == "enrlgood":
+        return "Undergraduate"
+    if compact in ("gradstud", "utbachelorgrad", "utbachlorgrad"):
+        return "Graduate"
+    return pd.NA
+
+
 def academic_level_group_series(df):
     """
     Return a Series of 'Undergraduate' | 'Graduate' | 'Other' aligned to df.index,
     or None if AcademicStatus (latest semester) is not present.
+
+    When Irregular Program is Option III and AcademicStatus maps to Other, level is inferred
+    from Career-like columns first, then Derived Academic Status (Advisor Toolkit fields
+    that appear before Irregular Program in typical exports).
     """
     status_col = find_academic_status_latest_semester_column(df)
     if not status_col:
         return None
-    return df[status_col].map(_map_academic_status_to_level_group)
+    out = df[status_col].map(_map_academic_status_to_level_group)
+
+    irregular_col = next(
+        (c for c in df.columns if c.strip().lower() == "irregular program"),
+        None,
+    )
+    if irregular_col:
+        opt3 = df[irregular_col].map(_is_option_iii_irregular_label)
+        fc = opt3 & out.eq("Other")
+        if fc.any():
+            career_col = find_first_matching_column(
+                df,
+                ["Career", "Academic Career", "Student Career", "Career Description"],
+            )
+            das_col = next(
+                (c for c in df.columns if c.strip().lower() == "derived academic status"),
+                None,
+            )
+            sub = out.loc[fc].copy()
+            if career_col:
+                inf_c = df.loc[fc, career_col].map(_infer_level_from_career_like)
+                sub = inf_c.where(inf_c.notna(), sub)
+            if das_col:
+                inf_d = df.loc[fc, das_col].map(_map_derived_status_to_undergrad_grad)
+                sub = inf_d.where(inf_d.notna(), sub)
+            out.loc[fc] = sub
+
+    return out
 
 
 def ordered_level_counts(level_series, level_order=("Undergraduate", "Graduate", "Other")):
@@ -503,7 +606,6 @@ DEFAULT_SCHOOL_CODE_LOOKUP = {
     "3": "Education",
     "4": "Engineering",
     "5": "Fine Arts",
-    "6": "Graduate School",
     "7": "Law School",
     "8": "Pharmacy",
     "9": "Architecture",
@@ -600,9 +702,35 @@ def translate_pseudo_school(series, code_to_school):
     return series.apply(_translate)
 
 
+def _pseudo_code_is_graduate_school(code_str):
+    """Toolkit pseudo-school code 6 is Graduate School (dropped from participation/enrollment school lists)."""
+    c = str(code_str).strip()
+    return c.isdigit() and int(c) == 6
+
+
 def _is_graduate_school(school_name):
-    """True if this school is Graduate School (not exclusive; excluded from school breakdown)."""
-    return str(school_name).strip().lower() == "graduate school"
+    """True if this bucket is UT pseudo-school code 6 / Graduate School (excluded from school breakdown)."""
+    if school_name is None:
+        return False
+    try:
+        if pd.isna(school_name):
+            return False
+    except (TypeError, ValueError):
+        pass
+    raw = str(school_name).strip()
+    if not raw:
+        return False
+    low = raw.lower()
+    if low == "graduate school":
+        return True
+    m = re.match(r"^\(([^)]+)\)\s*(.*)$", raw)
+    if m:
+        if _pseudo_code_is_graduate_school(m.group(1)):
+            return True
+        rest = m.group(2).strip().lower()
+        if rest == "graduate school":
+            return True
+    return False
 
 
 def _parse_schools_from_cell(val, code_to_school):
@@ -615,9 +743,15 @@ def _parse_schools_from_cell(val, code_to_school):
         m = re.search(r"\(([^)]+)\)", s)
         if m:
             code = m.group(1).strip()
-            result.add(canonicalize_school_display_name(code_to_school.get(code, s)))
+            if _pseudo_code_is_graduate_school(code):
+                continue
+            name = canonicalize_school_display_name(code_to_school.get(code, s))
+            if not _is_graduate_school(name):
+                result.add(name)
         else:
-            result.add(canonicalize_school_display_name(s))
+            name = canonicalize_school_display_name(s)
+            if not _is_graduate_school(name):
+                result.add(name)
     return result
 
 
@@ -689,8 +823,8 @@ def load_enrollment_by_school(path, code_to_school):
             enr = enr.dropna(subset=["School"])
             enr["School"] = enr["School"].map(canonicalize_school_display_name)
             enr = enr[enr["School"].astype(str).str.strip() != ""]
+            enr = enr[~enr["School"].map(_is_graduate_school)]
             total_enrollment = int(enr[count_col].sum())
-            enr = enr[~enr["School"].str.lower().str.strip().eq("graduate school")]
             counts = enr.groupby("School", as_index=True)[count_col].sum()
             return counts, total_enrollment
     # Student-level format (same as event CSV)
@@ -1050,7 +1184,8 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
         "Rows with missing names are excluded before deduplication. Missing demographic values are shown as Unknown. "
         "For Program Type (shown as Degree-Seeking vs ESL, Unknown, Irregular in tables/charts), rows with Derived Academic Status "
         "Never_Enrolled are Unknown only when they have no ESL signal (major/school/Irregular Program) and no other Irregular Program "
-        "label; ESL is prioritized over Unknown."
+        "label; ESL is prioritized over Unknown. Irregular Program Option III is ignored for Program Type (Degree-Seeking unless ESL); "
+        "for Academic Status Undergraduate vs Graduate, Option III rows that would otherwise be Other use Career or Derived Academic Status when available."
     )
 
     # Data checks from the full event-series input (all uploaded files combined).
