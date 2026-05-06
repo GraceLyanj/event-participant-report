@@ -195,6 +195,28 @@ def normalize_citizenship(series):
     return s.map(relabel)
 
 
+def country_distribution_category(df):
+    """
+    If the participant file has a Country column, return (series, title) for reporting.
+
+    series is normalize_unknown(country) so blanks align with other demographics.
+    Column detection matches Gender/Citizenship style via find_first_matching_column.
+
+    Returns None when no Country-like column exists.
+    """
+    if df is None or df.empty:
+        return None
+    country_col = find_first_matching_column(
+        df,
+        [
+            "Country",
+        ],
+    )
+    if not country_col:
+        return None
+    return (normalize_unknown(df[country_col]), "Proportion of Country")
+
+
 def normalize_unknown(series):
     """Normalize blanks/missing values to 'Unknown' for reporting (one category per field)."""
     s = series.astype(str).str.strip()
@@ -1059,6 +1081,10 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
     citizenship_col = find_first_matching_column(df, ["Citizenship"])
     if citizenship_col:
         categories.append((normalize_unknown(normalize_citizenship(df[citizenship_col])), "Proportion of Citizenship"))
+
+    country_cat = country_distribution_category(df)
+    if country_cat:
+        categories.append(country_cat)
 
     # Irregular = something in 'Irregular Program' field (student from IP)
     df["Program Type"] = program_type_from_irregular_field(df)
