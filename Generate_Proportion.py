@@ -404,7 +404,7 @@ def program_type_from_irregular_field(df):
     return normalize_unknown(program)
 
 
-# Common Toolkit misspellings → single label (spacing/hyphens ignored for matching).
+# Common Toolkit misspellings → Scholar (spacing/parens ignored for matching).
 _POSTDOC_FELLOW_COMPACT_FORMS = frozenset({
     "postdoctoralfellow",
     "postdocoralfellow",  # Postdocoral
@@ -412,8 +412,35 @@ _POSTDOC_FELLOW_COMPACT_FORMS = frozenset({
 })
 
 
+def _compact_for_scholar_label_match(val):
+    """Normalize status text for Visiting Scholar / Postdoctoral Fellow detection."""
+    if val is None:
+        return ""
+    try:
+        if pd.isna(val):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    s = str(val).strip().lower()
+    if not s or s == "nan":
+        return ""
+    return re.sub(r"[\s\-_/()]+", "", s)
+
+
+def _status_represents_scholar(val):
+    """True for Visiting Scholar and Postdoctoral Fellow (Toolkit spellings and typos), and canonical 'Scholar'."""
+    compact = _compact_for_scholar_label_match(val)
+    if not compact:
+        return False
+    if compact == "scholar":
+        return True
+    if compact in _POSTDOC_FELLOW_COMPACT_FORMS:
+        return True
+    return "visitingscholar" in compact
+
+
 def canonicalize_derived_academic_status(val):
-    """Map Postdoctoral Fellow typos to 'Postdoctoral Fellow'; leave other values unchanged."""
+    """Map Visiting Scholar and Postdoctoral Fellow (incl. typos) to 'Scholar'; leave other values unchanged."""
     if val is None:
         return val
     try:
@@ -424,9 +451,8 @@ def canonicalize_derived_academic_status(val):
     s = str(val).strip()
     if not s or s.lower() == "nan":
         return val
-    compact = re.sub(r"[\s\-_]+", "", s.lower())
-    if compact in _POSTDOC_FELLOW_COMPACT_FORMS:
-        return "Postdoctoral Fellow"
+    if _status_represents_scholar(s):
+        return "Scholar"
     return val
 
 
@@ -470,10 +496,11 @@ def find_academic_status_latest_semester_column(df):
 
 def _map_academic_status_to_level_group(val):
     """
-    Map AcademicStatus (latest semester) to Undergraduate / Graduate / Other.
+    Map AcademicStatus (latest semester) to Undergraduate / Graduate / Scholar / Other.
 
     Only the Toolkit labels used in this export are recognized (spacing, slash,
-    case, and NBSP-insensitive); anything else is Other.
+    case, and NBSP-insensitive); Visiting Scholar and Postdoctoral Fellow map to Scholar.
+    Anything else unrecognized is Other.
     """
     if val is None:
         return "Other"
@@ -489,13 +516,16 @@ def _map_academic_status_to_level_group(val):
         s = s.replace(ch, "-")
     if s in {"", "nan", "none", "n/a", "na", "--", "-"}:
         return "Other"
-    compact = re.sub(r"[\s\-_/]+", "", s)
+    compact = re.sub(r"[\s\-_/()]+", "", s)
+    if _status_represents_scholar(s):
+        return "Scholar"
     return _LEVEL_GROUP_BY_COMPACT_STATUS.get(compact, "Other")
 
 
 def _infer_level_from_career_like(val):
     """
-    Map free-text career fields to Undergraduate / Graduate when obvious.
+    Map free-text career fields to Undergraduate / Graduate / Scholar when obvious.
+    Scholar is checked before Graduate so Postdoctoral Fellow is not classified as Graduate.
     Returns pd.NA when unknown.
     """
     if val is None:
@@ -509,6 +539,8 @@ def _infer_level_from_career_like(val):
     s = s.replace("\xa0", " ").strip().lower()
     if s in {"", "nan", "none", "n/a", "na", "--", "-"}:
         return pd.NA
+    if _status_represents_scholar(s):
+        return "Scholar"
     if re.search(r"\bundergraduate\b|\bundergrad\b|\bugrd\b", s):
         return "Undergraduate"
     if re.search(
@@ -521,8 +553,8 @@ def _infer_level_from_career_like(val):
 
 def _map_derived_status_to_undergrad_grad(val):
     """
-    Map Derived Academic Status compact token to Undergraduate / Graduate when unambiguous.
-    Returns pd.NA when not an enrollment level signal (e.g. Never_Enrolled).
+    Map Derived Academic Status to Undergraduate / Graduate / Scholar when unambiguous.
+    Returns pd.NA when not an enrollment-level signal (e.g. Never_Enrolled).
     """
     if val is None:
         return pd.NA
@@ -538,6 +570,8 @@ def _map_derived_status_to_undergrad_grad(val):
         s = s.replace(ch, "-")
     if s in {"", "nan", "none", "n/a", "na", "--", "-"}:
         return pd.NA
+    if _status_represents_scholar(s):
+        return "Scholar"
     compact = re.sub(r"[\s\-_/]+", "", s)
     if compact == "enrlgood":
         return "Undergraduate"
@@ -548,7 +582,7 @@ def _map_derived_status_to_undergrad_grad(val):
 
 def academic_level_group_series(df):
     """
-    Return a Series of 'Undergraduate' | 'Graduate' | 'Other' aligned to df.index,
+    Return a Series of 'Undergraduate' | 'Graduate' | 'Scholar' | 'Other' aligned to df.index,
     or None if AcademicStatus (latest semester) is not present.
 
     When Irregular Program is Option III and AcademicStatus maps to Other, level is inferred
@@ -588,7 +622,7 @@ def academic_level_group_series(df):
     return out
 
 
-def ordered_level_counts(level_series, level_order=("Undergraduate", "Graduate", "Other")):
+def ordered_level_counts(level_series, level_order=("Undergraduate", "Graduate", "Scholar", "Other")):
     """value_counts restricted to level_order; drops categories with zero count."""
     counts = level_series.value_counts()
     ordered = pd.Series({k: int(counts.get(k, 0)) for k in level_order})
