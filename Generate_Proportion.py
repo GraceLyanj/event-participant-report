@@ -308,8 +308,32 @@ def _text_indicates_esl_program(val):
     return False
 
 
+# Advisor Toolkit glitch: euro sign instead of "(E)" before Natural Sciences.
+_EURO_PREFIX_NATURAL_SCIENCES = re.compile(
+    r"^\s*\u20ac\s*(?=Natural\s+Sciences\b)",
+    re.IGNORECASE,
+)
+
+
+def _normalize_euro_natural_sciences_pseudo(val):
+    """Map €Natural Sciences → (E)Natural Sciences for pseudo-school parsing."""
+    if val is None:
+        return val
+    try:
+        if pd.isna(val):
+            return val
+    except (TypeError, ValueError):
+        pass
+    s = unicodedata.normalize("NFKC", str(val))
+    return _EURO_PREFIX_NATURAL_SCIENCES.sub("(E)", s)
+
+
+# Toolkit spelling vs preferred label for Undergraduate Studies bucket display / merges.
+_INTERDEPARTMENTAL_LABEL_RE = re.compile(r"\binter[- ]?departmental\b", re.IGNORECASE)
+
+
 def canonicalize_school_display_name(name):
-    """School column: treat esl / ESL / Esl / esL (Unicode-folded) as one label 'ESL'."""
+    """School column: ESL unified; Interdepartmental -> Inter-Department; euro glitch; (X) pseudo-school -> blank."""
     if name is None:
         return name
     try:
@@ -320,6 +344,13 @@ def canonicalize_school_display_name(name):
     s = str(name).strip()
     if not s:
         return s
+    s = str(_normalize_euro_natural_sciences_pseudo(s)).strip()
+    if not s:
+        return s
+    s = _INTERDEPARTMENTAL_LABEL_RE.sub("Inter-Department", s)
+    # Toolkit placeholder pseudo-school (X) — treat as no college / blank for counts and merges.
+    if re.match(r"^\(\s*X\s*\)", s, re.IGNORECASE):
+        return ""
     if _normalized_esl_key(s) == "esl":
         return "ESL"
     m = re.match(r"^\([^)]+\)\s*(.+)$", s)
@@ -345,6 +376,33 @@ def _is_option_iii_irregular_label(val):
     return compact in ("optioniii", "option3", "optiii")
 
 
+def esl_signal_mask(df):
+    """
+    Per-row ESL signal from Irregular Program cell text, Major, and Pseudo Sch columns.
+    Same rules as Program Type (English as a Second Language tokens/phrases).
+    """
+    irregular_col = next(
+        (c for c in df.columns if c.strip().lower() == "irregular program"),
+        None,
+    )
+    irregular_esl_signal = pd.Series(False, index=df.index)
+    if irregular_col:
+        irregular_esl_signal = df[irregular_col].map(_text_indicates_esl_program)
+
+    major_col = find_first_matching_column(df, ["Maj1 Name", "Major", "Major Name"])
+    major_esl = (
+        df[major_col].map(_text_indicates_esl_program)
+        if major_col
+        else pd.Series(False, index=df.index)
+    )
+    pseudo_cols = [c for c in df.columns if c.strip().lower().startswith("pseudo sch")]
+    school_esl = pd.Series(False, index=df.index)
+    for c in pseudo_cols:
+        school_esl = school_esl | df[c].map(_text_indicates_esl_program)
+
+    return irregular_esl_signal | major_esl | school_esl
+
+
 def program_type_from_irregular_field(df):
     """
     Program type rules for reporting:
@@ -354,6 +412,7 @@ def program_type_from_irregular_field(df):
       if neither ESL nor other irregular label (still Regular), use Unknown
     - ESL if Irregular Program, Major, or any Pseudo Sch cell indicates ESL / English as a Second Language
       (overrides Regular and other irregular labels when status is not Never_Enrolled)
+    - Scholar when Irregular Program indicates scholar / visiting scholar / postdoctoral fellow (not overriding ESL)
     """
     status_col = next(
         (c for c in df.columns if c.strip().lower() == "derived academic status"),
@@ -367,30 +426,17 @@ def program_type_from_irregular_field(df):
     # Start as Regular when Irregular Program is blank; Never_Enrolled handled below.
     program = pd.Series(["Regular"] * len(df), index=df.index, dtype=object)
 
-    irregular_esl_signal = pd.Series(False, index=df.index)
     if irregular_col:
         raw = df[irregular_col].astype(str).str.strip()
         raw = raw.replace({"": pd.NA, "nan": pd.NA, "None": pd.NA, "none": pd.NA})
         raw = raw.mask(raw.map(_is_option_iii_irregular_label), pd.NA)
-        irregular_esl_signal = df[irregular_col].map(_text_indicates_esl_program)
         esl_keys = raw.map(lambda x: _normalized_esl_key(x) if pd.notna(x) else pd.NA)
         esl_mask = raw.notna() & esl_keys.eq("esl")
         raw = raw.mask(esl_mask, "ESL")
         # If not blank, preserve category value from uploaded file (ESL normalized above).
         program = raw.fillna("Regular")
 
-    major_col = find_first_matching_column(df, ["Maj1 Name", "Major", "Major Name"])
-    major_esl = (
-        df[major_col].map(_text_indicates_esl_program)
-        if major_col
-        else pd.Series(False, index=df.index)
-    )
-    pseudo_cols = [c for c in df.columns if c.strip().lower().startswith("pseudo sch")]
-    school_esl = pd.Series(False, index=df.index)
-    for c in pseudo_cols:
-        school_esl = school_esl | df[c].map(_text_indicates_esl_program)
-
-    is_esl = irregular_esl_signal | major_esl | school_esl
+    is_esl = esl_signal_mask(df)
 
     never_mask = pd.Series(False, index=df.index)
     if status_col:
@@ -400,6 +446,9 @@ def program_type_from_irregular_field(df):
     # Never_Enrolled: Unknown only if no ESL and no other irregular label (still Regular from blank IP field).
     program.loc[never_mask & ~is_esl & program.eq("Regular")] = "Unknown"
     program.loc[is_esl] = "ESL"
+    if irregular_col:
+        scholar_ip = df[irregular_col].map(_irregular_program_indicates_scholar)
+        program.loc[scholar_ip & ~is_esl] = "Scholar"
 
     return normalize_unknown(program)
 
@@ -570,11 +619,14 @@ def _map_derived_status_to_undergrad_grad(val):
 
 def academic_level_group_series(df):
     """
-    Return a Series of 'Undergraduate' | 'Graduate' | 'Scholar' | 'Other' aligned to df.index,
+    Return a Series of 'Undergraduate' | 'Graduate' | 'Scholar' | 'ESL' | 'Other' aligned to df.index,
     or None if AcademicStatus (latest semester) is not present.
 
     Scholar is assigned only when Irregular Program indicates scholar, visiting scholar,
-    or postdoctoral fellow (see _irregular_program_indicates_scholar).
+    or postdoctoral fellow (see _irregular_program_indicates_scholar), and ESL does not apply.
+
+    ESL uses the same Irregular Program / Major / Pseudo Sch signals as Program Type and overrides
+    other buckets so ESL is separated from Other.
 
     When Irregular Program is Option III and AcademicStatus maps to Other, level is inferred
     from Career-like columns first, then Derived Academic Status (Advisor Toolkit fields
@@ -583,6 +635,7 @@ def academic_level_group_series(df):
     status_col = find_academic_status_latest_semester_column(df)
     if not status_col:
         return None
+    is_esl = esl_signal_mask(df)
     out = df[status_col].map(_map_academic_status_to_level_group)
 
     irregular_col = next(
@@ -591,8 +644,9 @@ def academic_level_group_series(df):
     )
     if irregular_col:
         scholar_ip = df[irregular_col].map(_irregular_program_indicates_scholar)
-        if scholar_ip.any():
-            out = out.mask(scholar_ip, "Scholar")
+        scholar_rows = scholar_ip & ~is_esl
+        if scholar_rows.any():
+            out = out.mask(scholar_rows, "Scholar")
 
         opt3 = df[irregular_col].map(_is_option_iii_irregular_label)
         fc = opt3 & out.eq("Other")
@@ -614,10 +668,13 @@ def academic_level_group_series(df):
                 sub = inf_d.where(inf_d.notna(), sub)
             out.loc[fc] = sub
 
+    if is_esl.any():
+        out.loc[is_esl] = "ESL"
+
     return out
 
 
-def ordered_level_counts(level_series, level_order=("Undergraduate", "Graduate", "Scholar", "Other")):
+def ordered_level_counts(level_series, level_order=("Undergraduate", "Graduate", "Scholar", "ESL", "Other")):
     """value_counts restricted to level_order; drops categories with zero count."""
     counts = level_series.value_counts()
     ordered = pd.Series({k: int(counts.get(k, 0)) for k in level_order})
@@ -720,12 +777,14 @@ def translate_pseudo_school(series, code_to_school):
     def _translate(val):
         if pd.isna(val):
             return val
-        s = str(val)
+        s = _normalize_euro_natural_sciences_pseudo(str(val))
         # Extract code inside parentheses, e.g. "(E)Natural Sciences" -> "E"
         m = re.search(r"\(([^)]+)\)", s)
         if not m:
             return s
         code = m.group(1).strip()
+        if _pseudo_code_is_placeholder_x(code):
+            return ""
         return code_to_school.get(code, s)
 
     return series.apply(_translate)
@@ -735,6 +794,11 @@ def _pseudo_code_is_graduate_school(code_str):
     """Toolkit pseudo-school code 6 is Graduate School (dropped from participation/enrollment school lists)."""
     c = str(code_str).strip()
     return c.isdigit() and int(c) == 6
+
+
+def _pseudo_code_is_placeholder_x(code_str):
+    """Toolkit pseudo-school code X means blank / no school for reporting."""
+    return str(code_str).strip().upper() == "X"
 
 
 def _is_graduate_school(school_name):
@@ -769,17 +833,20 @@ def _parse_schools_from_cell(val, code_to_school):
     parts = [p.strip() for p in str(val).split("/") if p.strip()]
     result = set()
     for s in parts:
+        s = _normalize_euro_natural_sciences_pseudo(s)
         m = re.search(r"\(([^)]+)\)", s)
         if m:
             code = m.group(1).strip()
             if _pseudo_code_is_graduate_school(code):
                 continue
+            if _pseudo_code_is_placeholder_x(code):
+                continue
             name = canonicalize_school_display_name(code_to_school.get(code, s))
-            if not _is_graduate_school(name):
+            if name and str(name).strip() and not _is_graduate_school(name):
                 result.add(name)
         else:
             name = canonicalize_school_display_name(s)
-            if not _is_graduate_school(name):
+            if name and str(name).strip() and not _is_graduate_school(name):
                 result.add(name)
     return result
 
@@ -887,7 +954,8 @@ def build_representation_comparison(participation_counts, total_participants, en
         )
 
     def _normalize_label(label: str) -> str:
-        s = str(label).strip()
+        raw = str(label).strip()
+        s = str(_normalize_euro_natural_sciences_pseudo(raw)).strip()
         m = re.match(r"\(([^)]+)\)\s*(.+)", s)
         core = m.group(2).strip() if m else s
         return canonicalize_school_display_name(core)
@@ -1203,10 +1271,12 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
         f"This report is based on N = {n_unique_eids} unique EID(s) from the event participant {file_phrase} (not on enrollment "
         "status). Duplicate rows for the same EID are dropped; the kept row is the first across the combined data. "
         "Rows with missing names are excluded before deduplication. Missing demographic values are shown as Unknown. "
-        "For Program Type (shown as Degree-Seeking vs ESL, Unknown, Irregular in tables/charts), rows with Derived Academic Status "
+        "For Program Type (shown as Degree-Seeking vs ESL, Scholar, Unknown, Irregular in tables/charts), rows with Derived Academic Status "
         "Never_Enrolled are Unknown only when they have no ESL signal (major/school/Irregular Program) and no other Irregular Program "
-        "label; ESL is prioritized over Unknown. Irregular Program Option III is ignored for Program Type (Degree-Seeking unless ESL). "
-        "For Academic Status, Scholar is assigned only when Irregular Program indicates scholar, visiting scholar, or postdoctoral fellow; "
+        "label; ESL is prioritized over Scholar and Unknown. Scholar matches the same Irregular Program rules as Academic Status. "
+        "Irregular Program Option III is ignored for Program Type (Degree-Seeking unless ESL). "
+        "For Academic Status, Scholar is assigned only when Irregular Program indicates scholar, visiting scholar, or postdoctoral fellow "
+        "(and ESL does not apply); ESL is its own bucket using the same Irregular Program / major / pseudo-school signals as Program Type. "
         "Option III rows that would otherwise be Other use Career or Derived Academic Status for Undergraduate vs Graduate."
     )
 
