@@ -685,6 +685,7 @@ def ordered_level_counts(level_series, level_order=("Undergraduate", "Graduate",
 SCHOOL_LOOKUP_FILENAME = "COLA Toolkit, Spring 2026.csv"
 # Enrollment reference for representation comparison (optional)
 ENROLLMENT_REFERENCE_FILENAME = "All_International_Students_Enrolled.csv"
+COUNTRY_ENROLLMENT_REFERENCE_FILENAME = "All_International_Students_By_Country.csv"
 
 # Built‑in code → school mapping (used if no external lookup file is present).
 DEFAULT_SCHOOL_CODE_LOOKUP = {
@@ -738,6 +739,171 @@ def resolve_enrollment_path(csv_dir, script_dir=None, explicit_path=None):
         if os.path.isfile(p):
             return p
     return None
+
+
+def resolve_country_enrollment_path(csv_dir, script_dir=None):
+    """Return path to international enrollment-by-country reference CSV if found (script dir, csv dir, Downloads)."""
+    candidates = []
+    if script_dir:
+        candidates.append(os.path.join(script_dir, COUNTRY_ENROLLMENT_REFERENCE_FILENAME))
+    candidates.append(os.path.join(csv_dir, COUNTRY_ENROLLMENT_REFERENCE_FILENAME))
+    downloads = os.path.join(os.path.expanduser("~"), "Downloads", COUNTRY_ENROLLMENT_REFERENCE_FILENAME)
+    candidates.append(downloads)
+    for p in candidates:
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+def _normalize_country_key(name):
+    """Normalize country labels so enrollment and participant exports match when spelling differs slightly."""
+    if name is None:
+        return ""
+    try:
+        if pd.isna(name):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    s = unicodedata.normalize("NFKC", str(name)).strip()
+    for ch in ("\u2018", "\u2019", "\u201b", "\u2032"):
+        s = s.replace(ch, "'")
+    s = re.sub(r"\s+", " ", s)
+    return s.casefold()
+
+
+def load_enrollment_by_country(path):
+    """
+    Load international enrollment counts by country from a summary CSV.
+    Expects a 'Country' column and one of Count, Enrollment, or Students.
+    Optional 'Continent' column is returned for display in comparison tables.
+    Ignores blank country rows and summary rows labeled Grand Total.
+
+    Returns
+    -------
+    tuple
+        (counts Series keyed by normalized country, total enrollment, continent_by_key, display_name_by_key)
+    """
+    try:
+        enr = pd.read_csv(path)
+    except Exception:
+        return pd.Series(dtype=float), 0, {}, {}
+    enr.columns = enr.columns.str.strip()
+    if "Country" not in enr.columns:
+        return pd.Series(dtype=float), 0, {}, {}
+    count_col = next(
+        (c for c in ("Count", "Enrollment", "Students") if c in enr.columns),
+        None,
+    )
+    if not count_col:
+        return pd.Series(dtype=float), 0, {}, {}
+    has_continent = "Continent" in enr.columns
+    enr = enr.dropna(subset=["Country"])
+    enr["Country"] = enr["Country"].astype(str).str.strip()
+    enr = enr[enr["Country"] != ""]
+    enr = enr[~enr["Country"].str.casefold().eq("grand total")]
+    counts_by_key = {}
+    label_by_key = {}
+    continent_by_key = {}
+    for _, row in enr.iterrows():
+        raw = str(row["Country"]).strip()
+        key = _normalize_country_key(raw)
+        if not key:
+            continue
+        try:
+            c = int(float(row[count_col]))
+        except (TypeError, ValueError):
+            continue
+        counts_by_key[key] = counts_by_key.get(key, 0) + c
+        if key not in label_by_key:
+            label_by_key[key] = raw
+        if has_continent and key not in continent_by_key:
+            ct = row["Continent"]
+            if ct is not None and str(ct).strip() and str(ct).strip().lower() != "nan":
+                continent_by_key[key] = str(ct).strip()
+    if not counts_by_key:
+        return pd.Series(dtype=float), 0, {}, {}
+    total = int(sum(counts_by_key.values()))
+    counts = pd.Series(counts_by_key, dtype=float)
+    return counts, total, continent_by_key, label_by_key
+
+
+def build_country_representation_comparison(
+    participation_counts,
+    total_participants,
+    enrollment_counts,
+    total_enrollment,
+    enrollment_display_by_key=None,
+    continent_by_key=None,
+):
+    """
+    Same logic as school representation: Enrollment %, Participation %, ratio = part% / enr%.
+    participation_counts: value_counts–style Series (index = country label as in participant file).
+    enrollment_counts: Series indexed by _normalize_country_key (as from load_enrollment_by_country).
+    enrollment_display_by_key: optional dict norm_key -> preferred display name (e.g. from reference file).
+    continent_by_key: optional dict norm_key -> continent label from reference file.
+    """
+    empty_cols = [
+        "Continent",
+        "Country",
+        "Enrollment Count",
+        "Enrollment %",
+        "Participant EIDs",
+        "Participation %",
+        "Representation Ratio",
+    ]
+    if total_participants <= 0 or total_enrollment <= 0:
+        return pd.DataFrame(columns=empty_cols)
+
+    part_norm = {}
+    part_label = {}
+    for country, val in participation_counts.items():
+        key = _normalize_country_key(country)
+        if not key:
+            continue
+        part_norm[key] = part_norm.get(key, 0) + int(val)
+        if key not in part_label:
+            part_label[key] = str(country).strip()
+
+    enr_norm = {}
+    for k, val in enrollment_counts.items():
+        key = _normalize_country_key(k)
+        if not key:
+            continue
+        enr_norm[key] = enr_norm.get(key, 0) + int(val)
+
+    all_keys = sorted(set(part_norm.keys()) | set(enr_norm.keys()))
+    rows = []
+    disp = enrollment_display_by_key or {}
+    cont = continent_by_key or {}
+    for key in all_keys:
+        enc = int(enr_norm.get(key, 0))
+        prc = int(part_norm.get(key, 0))
+        if enc == 0 and prc == 0:
+            continue
+        enr_pct = (enc / total_enrollment) * 100 if total_enrollment > 0 else 0.0
+        part_pct = (prc / total_participants) * 100 if total_participants > 0 else 0.0
+        ratio = (part_pct / enr_pct) if enr_pct else float("nan")
+        display_country = disp.get(key) or part_label.get(key) or key
+        continent_val = cont.get(key, "")
+        rows.append(
+            {
+                "Continent": continent_val,
+                "Country": display_country,
+                "Enrollment Count": enc,
+                "Enrollment %": enr_pct,
+                "Participant EIDs": prc,
+                "Participation %": part_pct,
+                "Representation Ratio": ratio,
+            }
+        )
+    out = pd.DataFrame(rows)
+    if not out.empty:
+        out = out.assign(_sortkey=out["Country"].astype(str).str.casefold()).sort_values("_sortkey").drop(
+            columns=["_sortkey"]
+        ).reset_index(drop=True)
+        if out["Continent"].astype(str).str.strip().eq("").all():
+            out = out.drop(columns=["Continent"])
+    return out
 
 
 def load_school_lookup(path):
@@ -996,16 +1162,17 @@ def build_representation_comparison(participation_counts, total_participants, en
     return pd.DataFrame(rows)
 
 
-def comparison_table_to_doc(doc, df):
+def comparison_table_to_doc(doc, df, intro_paragraph=None):
     """Add representation comparison table to document."""
     if df.empty:
         return
-    doc.add_paragraph(
-        "Enrollment % = (School enrollment / total enrollment in reference file) × 100. "
-        "Participation % = (participant EIDs in school / total unique event EIDs) × 100. "
-        "Ratio = Participation % / Enrollment % (≈1 proportional, >1 overrepresented, <1 underrepresented).",
-        style="Normal",
-    )
+    if intro_paragraph is None:
+        intro_paragraph = (
+            "Enrollment % = (School enrollment / total enrollment in reference file) × 100. "
+            "Participation % = (participant EIDs in school / total unique event EIDs) × 100. "
+            "Ratio = Participation % / Enrollment % (≈1 proportional, >1 overrepresented, <1 underrepresented)."
+        )
+    doc.add_paragraph(intro_paragraph, style="Normal")
     nrows, ncols = len(df) + 1, len(df.columns)
     table = doc.add_table(rows=nrows, cols=ncols)
     table.style = "Table Grid"
@@ -1026,9 +1193,13 @@ def comparison_table_to_doc(doc, df):
     doc.add_paragraph()
 
 
-def side_by_side_bar_chart_bytes(comparison_df, title="Enrollment % vs Participation % by School"):
-    """Side-by-side bar chart: Enrollment % and Participation % per school."""
-    if comparison_df.empty or "School" not in comparison_df.columns:
+def side_by_side_bar_chart_bytes(
+    comparison_df,
+    title="Enrollment % vs Participation % by School",
+    label_column="School",
+):
+    """Side-by-side bar chart: Enrollment % and Participation % per category (school or country)."""
+    if comparison_df.empty or label_column not in comparison_df.columns:
         buf = io.BytesIO()
         plt.figure(figsize=(8, 4))
         plt.text(0.5, 0.5, "No data", ha="center", va="center")
@@ -1043,7 +1214,12 @@ def side_by_side_bar_chart_bytes(comparison_df, title="Enrollment % vs Participa
     ax.bar([i - w / 2 for i in x], df["Enrollment %"], width=w, label="Enrollment %", color="steelblue")
     ax.bar([i + w / 2 for i in x], df["Participation %"], width=w, label="Participation %", color="coral")
     ax.set_xticks(x)
-    ax.set_xticklabels(df["School"].astype(str).str[:30] + df["School"].astype(str).str.len().gt(30).map({True: "…", False: ""}), rotation=45, ha="right")
+    ax.set_xticklabels(
+        df[label_column].astype(str).str[:30]
+        + df[label_column].astype(str).str.len().gt(30).map({True: "…", False: ""}),
+        rotation=45,
+        ha="right",
+    )
     ax.set_ylabel("Percentage")
     ax.set_title(title)
     ax.legend()
@@ -1056,7 +1232,11 @@ def side_by_side_bar_chart_bytes(comparison_df, title="Enrollment % vs Participa
     return buf
 
 
-def representation_ratio_chart_bytes(comparison_df, title="Representation Ratio & Over/Under by School"):
+def representation_ratio_chart_bytes(
+    comparison_df,
+    title="Representation Ratio & Over/Under by School",
+    label_column="School",
+):
     """Bar chart of representation ratio (1 = proportional). Gray ≈ proportional, red under, blue/green over."""
     if comparison_df.empty or "Representation Ratio" not in comparison_df.columns:
         buf = io.BytesIO()
@@ -1080,7 +1260,10 @@ def representation_ratio_chart_bytes(comparison_df, title="Representation Ratio 
     ax.barh(y_pos, df["Representation Ratio"], color=colors)
     ax.axvline(x=1.0, color="black", linestyle="--", linewidth=1, label="Proportional (1.0)")
     ax.set_yticks(y_pos)
-    ax.set_yticklabels(df["School"].astype(str).str[:35] + df["School"].astype(str).str.len().gt(35).map({True: "…", False: ""}))
+    ax.set_yticklabels(
+        df[label_column].astype(str).str[:35]
+        + df[label_column].astype(str).str.len().gt(35).map({True: "…", False: ""})
+    )
     ax.set_xlabel("Representation Ratio (gray ≈ proportional, green over, red under)")
     ax.set_title(title)
     ax.legend()
@@ -1249,6 +1432,11 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
     school_lookup_path = resolve_school_lookup_path(csv_dir, script_dir)
     code_to_school = load_school_lookup(school_lookup_path) if school_lookup_path else {}
     school_counts, school_proportions_df = student_based_school_proportions(df, code_to_school)
+
+    country_col = find_first_matching_column(df, ["Country"])
+    country_counts = None
+    if country_col:
+        country_counts = normalize_unknown(df[country_col]).value_counts()
 
     if len(event_paths) == 1:
         base = os.path.splitext(os.path.basename(event_paths[0]))[0]
@@ -1426,6 +1614,56 @@ def generate_report(event_csv_path, enrollment_reference_path=None, never_enroll
     elif not school_counts.empty:
         print("No enrollment reference file found; comparison section omitted. Place All_International_Students_Enrolled.csv in the CSV dir or pass it as second argument.")
 
+    country_enrollment_path = resolve_country_enrollment_path(csv_dir, script_dir)
+    if country_col and country_counts is not None and not country_counts.empty:
+        if country_enrollment_path:
+            enc_c, tot_c, cont_map, name_map = load_enrollment_by_country(country_enrollment_path)
+            if tot_c > 0 and not enc_c.empty:
+                country_comp_df = build_country_representation_comparison(
+                    country_counts,
+                    n_unique_eids,
+                    enc_c,
+                    tot_c,
+                    enrollment_display_by_key=name_map,
+                    continent_by_key=cont_map,
+                )
+                if not country_comp_df.empty:
+                    doc.add_heading("Comparison to International Enrollment (by Country)", level=1)
+                    doc.add_paragraph(f"Country enrollment reference: {country_enrollment_path}")
+                    country_intro = (
+                        "Enrollment % = (country enrollment / total international enrollment in reference file) × 100. "
+                        "Participation % = (participant EIDs with this country / total unique event EIDs) × 100. "
+                        "Ratio = Participation % / Enrollment % (≈1 proportional, >1 overrepresented, <1 underrepresented)."
+                    )
+                    comparison_table_to_doc(doc, country_comp_df, intro_paragraph=country_intro)
+                    doc.add_heading("Enrollment % vs Participation % by Country", level=2)
+                    doc.add_picture(
+                        side_by_side_bar_chart_bytes(
+                            country_comp_df,
+                            title="Enrollment % vs Participation % by Country (top 16 by enrollment %)",
+                            label_column="Country",
+                        ),
+                        width=Inches(5.5),
+                    )
+                    doc.add_heading("Representation Ratio & Over/Under by Country", level=2)
+                    doc.add_picture(
+                        representation_ratio_chart_bytes(
+                            country_comp_df,
+                            title="Representation Ratio & Over/Under by Country (16 closest to proportional, by ratio)",
+                            label_column="Country",
+                        ),
+                        width=Inches(5.5),
+                    )
+            else:
+                print(
+                    "Country enrollment reference file has no usable counts; skipping country comparison section."
+                )
+        else:
+            print(
+                "No country enrollment reference file found; country comparison omitted. "
+                f"Place {COUNTRY_ENROLLMENT_REFERENCE_FILENAME} in the CSV dir, script dir, or Downloads."
+            )
+
     try:
         doc.save(out_docx)
         print(f"Report saved to: {out_docx}")
@@ -1456,6 +1694,7 @@ def main():
         print("  Enrollment file: pass as the last argument if its name suggests enrollment (e.g. contains 'enroll' or 'international'+'student'),")
         print("  or use: python Generate_Proportion.py file1.csv file2.csv -- path/to/enrollment.csv")
         print("  If enrollment is omitted, looks for All_International_Students_Enrolled.csv in the first CSV's dir, script dir, or Downloads.")
+        print(f"  Country over/under table: include Country on participants; uses {COUNTRY_ENROLLMENT_REFERENCE_FILENAME} from the same search locations.")
         sys.exit(1)
 
     args = sys.argv[1:]

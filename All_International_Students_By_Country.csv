@@ -1,0 +1,135 @@
+Continent,Country,Count
+Africa,Algeria,3
+Africa,Angola,2
+Africa,Botswana,1
+Africa,Cabo Verde,1
+Africa,Cameroon,3
+Africa,Côte D'Ivoire,2
+Africa,Democratic Republic Of The Congo,1
+Africa,Egypt,43
+Africa,Ethiopia,8
+Africa,Gabon,1
+Africa,Ghana,28
+Africa,Guinea,1
+Africa,Kenya,12
+Africa,Madagascar,1
+Africa,Mauritius,2
+Africa,Morocco,2
+Africa,Namibia,1
+Africa,Nigeria,100
+Africa,Rwanda,1
+Africa,Senegal,2
+Africa,South Africa,12
+Africa,Sudan,2
+Africa,Tanzania,2
+Africa,Tunisia,1
+Africa,Uganda,8
+Africa,Zimbabwe,2
+Asia,Afghanistan,1
+Asia,Bahrain,1
+Asia,Bangladesh,73
+Asia,Cambodia,2
+Asia,China,1385
+Asia,Hong Kong,24
+Asia,India,1660
+Asia,Indonesia,49
+Asia,Iran,70
+Asia,Iraq,4
+Asia,Israel,15
+Asia,Japan,68
+Asia,Jordan,12
+Asia,Kazakhstan,10
+Asia,Kuwait,7
+Asia,Kyrgyzstan,3
+Asia,Lebanon,15
+Asia,Macau,4
+Asia,Malaysia,27
+Asia,Maldives,1
+Asia,Mongolia,1
+Asia,Myanmar,2
+Asia,Nepal,25
+Asia,Oman,3
+Asia,Pakistan,70
+Asia,Palestine,1
+Asia,Philippines,13
+Asia,Qatar,1
+Asia,Saudi Arabia,102
+Asia,Singapore,38
+Asia,South Korea,618
+Asia,Sri Lanka,10
+Asia,Syria,5
+Asia,Taiwan,271
+Asia,Thailand,42
+Asia,United Arab Emirates,3
+Asia,Vietnam,113
+Asia,Yemen,1
+Europe,Albania,1
+Europe,Armenia,4
+Europe,Austria,9
+Europe,Azerbaijan,19
+Europe,Belarus,3
+Europe,Belgium,6
+Europe,Channel Islands,1
+Europe,Croatia,2
+Europe,Cyprus,3
+Europe,Czechia,10
+Europe,Denmark,22
+Europe,Estonia,3
+Europe,Finland,3
+Europe,France,50
+Europe,Georgia,3
+Europe,Germany,73
+Europe,Greece,35
+Europe,Hungary,5
+Europe,Iceland,2
+Europe,Ireland,16
+Europe,Italy,35
+Europe,Latvia,1
+Europe,Lithuania,3
+Europe,Netherlands,11
+Europe,North Macedonia,2
+Europe,Norway,7
+Europe,Poland,4
+Europe,Portugal,5
+Europe,Romania,8
+Europe,Russia,31
+Europe,Serbia,3
+Europe,Slovakia,4
+Europe,Slovenia,2
+Europe,Spain,73
+Europe,Sweden,13
+Europe,Switzerland,14
+Europe,Türkiye,81
+Europe,Ukraine,15
+Europe,United Kingdom,96
+North America,Belize,1
+North America,Canada,250
+North America,Costa Rica,16
+North America,Dominica,1
+North America,Dominican Republic,5
+North America,El Salvador,12
+North America,Guatemala,32
+North America,Haiti,1
+North America,Honduras,16
+North America,Jamaica,9
+North America,Mexico,368
+North America,Nicaragua,6
+North America,Panama,33
+North America,Saint Kitts and Nevis,1
+North America,Saint Lucia,1
+North America,The Bahamas,2
+North America,Trinidad and Tobago,5
+Oceania,Australia,60
+Oceania,New Zealand,13
+South America,Argentina,19
+South America,Bolivia,15
+South America,Brazil,129
+South America,Chile,28
+South America,Colombia,80
+South America,Ecuador,18
+South America,Guyana,1
+South America,Paraguay,1
+South America,Peru,43
+South America,Suriname,1
+South America,Uruguay,1
+South America,Venezuela,39
